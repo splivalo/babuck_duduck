@@ -31,13 +31,11 @@ class CharacterManager extends ChangeNotifier {
   SpriteSequenceController get sequenceController =>
       spriteController.sequenceController;
 
-  static const int _idleBlinkWeight = 7;
-  static const int _idleSwayWeight = 3;
+  static const int _swayChanceDenominator = 5;
 
   Timer? _idleDelayTimer;
   RoomId _selectedRoom = RoomId.bedroom;
   bool _reactionPlaying = false;
-  final List<_IdleAnimationKind> _idleDeck = <_IdleAnimationKind>[];
   _IdleAnimationKind? _lastIdleKind;
   bool _forceNextIdleBlink = true;
   bool _isRoomJustEntered = true;
@@ -395,16 +393,13 @@ class CharacterManager extends ChangeNotifier {
         requestIdleStart(
           source: 'CharacterManager.handleZoneTap.onCompleted',
           forceRestart: true,
+          allowWhileInitializing: _roomIsInitializing,
         );
       },
     );
   }
 
   void _scheduleNextIdle(int idleSequenceToken) {
-    if (_roomIsInitializing) {
-      return;
-    }
-
     final delay = Duration(milliseconds: 400 + _random.nextInt(900));
     _logIdle(
       'IDLE_SCHEDULE source=CharacterManager._scheduleNextIdle schedulerId=$_activeIdleSchedulerId room=${_selectedRoom.name} delayMs=${delay.inMilliseconds}',
@@ -415,7 +410,7 @@ class CharacterManager extends ChangeNotifier {
       }
 
       _pendingIdle = true;
-      _pendingIdleAllowWhileInitializing = false;
+      _pendingIdleAllowWhileInitializing = _roomIsInitializing;
       unawaited(_playIdleBurst());
     });
   }
@@ -452,74 +447,32 @@ class CharacterManager extends ChangeNotifier {
     if (_isRoomJustEntered) {
       _isRoomJustEntered = false;
       _logIdle('IDLE_ROOM_ENTRY_GATE_CONSUMED room=${_selectedRoom.name}');
-      return _consumeForcedBlink();
+      _forceNextIdleBlink = false;
+      _lastIdleKind = _IdleAnimationKind.blink;
+      return currentCharacter.idleBlink;
     }
 
     if (_forceNextIdleBlink) {
-      return _consumeForcedBlink();
+      _forceNextIdleBlink = false;
+      _lastIdleKind = _IdleAnimationKind.blink;
+      return currentCharacter.idleBlink;
     }
 
-    if (_idleDeck.isEmpty) {
-      _refillIdleDeck();
+    if (_lastIdleKind == _IdleAnimationKind.sway) {
+      _lastIdleKind = _IdleAnimationKind.blink;
+      return currentCharacter.idleBlink;
     }
 
-    final nextKind = _idleDeck.removeAt(0);
-    _lastIdleKind = nextKind;
-    return switch (nextKind) {
-      _IdleAnimationKind.blink => currentCharacter.idleBlink,
-      _IdleAnimationKind.sway => currentCharacter.idleSway,
-    };
-  }
-
-  SequenceClip _consumeForcedBlink() {
-    if (_idleDeck.isEmpty) {
-      _refillIdleDeck();
+    if (_random.nextInt(_swayChanceDenominator) == 0) {
+      _lastIdleKind = _IdleAnimationKind.sway;
+      return currentCharacter.idleSway;
     }
-    _forceNextIdleBlink = false;
+
     _lastIdleKind = _IdleAnimationKind.blink;
-    _removeFirstIdleKindFromDeck(_IdleAnimationKind.blink);
     return currentCharacter.idleBlink;
   }
 
-  void _refillIdleDeck() {
-    final availableSwaySlots = List<int>.generate(
-      _idleBlinkWeight + 1,
-      (index) => index,
-    );
-    if (_lastIdleKind == _IdleAnimationKind.sway) {
-      availableSwaySlots.remove(0);
-    }
-
-    availableSwaySlots.shuffle(_random);
-    final swaySlots =
-        availableSwaySlots.take(_idleSwayWeight).toList(growable: false)
-          ..sort();
-
-    _idleDeck.clear();
-    var swaySlotIndex = 0;
-    for (var slot = 0; slot <= _idleBlinkWeight; slot += 1) {
-      if (swaySlotIndex < swaySlots.length &&
-          swaySlots[swaySlotIndex] == slot) {
-        _idleDeck.add(_IdleAnimationKind.sway);
-        swaySlotIndex += 1;
-      }
-      if (slot < _idleBlinkWeight) {
-        _idleDeck.add(_IdleAnimationKind.blink);
-      }
-    }
-  }
-
-  void _removeFirstIdleKindFromDeck(_IdleAnimationKind idleKind) {
-    final firstKindIndex = _idleDeck.indexOf(idleKind);
-    if (firstKindIndex == -1) {
-      return;
-    }
-
-    _idleDeck.removeAt(firstKindIndex);
-  }
-
   void _resetIdleDeckForRoomEntry() {
-    _idleDeck.clear();
     _lastIdleKind = null;
     _forceNextIdleBlink = true;
   }
