@@ -52,19 +52,40 @@ class MainRoomScreen extends StatefulWidget {
 }
 
 class _MainRoomScreenState extends State<MainRoomScreen> {
+  static const Duration _roomCrossfadeInDuration = Duration(milliseconds: 240);
+  static const Duration _roomCrossfadeOutDuration = Duration(milliseconds: 350);
+  static const Duration _blurFadeOutDuration = Duration(milliseconds: 500);
+  static const Duration _roomSwitchHoldDuration = Duration(milliseconds: 90);
+  static const Duration _minimumBlurVisibilityDuration = Duration(
+    milliseconds: 460,
+  );
+  static const Duration _characterFrameHardTimeout = Duration(seconds: 4);
+  static const Duration _maxTransitionDuration = Duration(milliseconds: 3500);
+
   final TouchZoneManager _touchZoneManager = const TouchZoneManager();
   late bool _characterAssetsReady;
   late bool _characterFrameReady;
   int _buildCount = 0;
   int _visibleAssetsRequestToken = 0;
-  bool _roomTransitionSelectionLocked = false;
+  int _roomSelectionWarmupToken = 0;
+  int _transitionEpochCounter = 0;
+  int _activeTransitionEpoch = 0;
   bool _roomTransitionInProgress = false;
   bool _roomTransitionOverlayVisible = false;
+  bool _roomTransitionBlurVisible = false;
   bool _awaitingTransitionCharacterFrame = false;
-  bool _roomTransitionOverlayFullyVisible = false;
-  bool _roomTransitionDismissPending = false;
-  String? _transitionOverlayBackgroundAsset;
+  DateTime? _characterFrameWaitStartedAt;
+  RoomId? _activeTransitionTargetRoom;
+  RoomId? _activeTransitionSourceRoom;
+  String? _transitionCrossfadeBackgroundAsset;
+  String? _transitionBlurBackgroundAsset;
+  DateTime? _transitionStartedAt;
+  DateTime? _roomSwitchCommittedAt;
+  RoomId? _queuedRoomSelection;
+  RoomId? _pendingSelectionWarmupRoom;
+  Future<bool>? _pendingSelectionWarmupFuture;
   Timer? _roomTransitionFailSafeTimer;
+  Timer? _roomTransitionOverlayReleaseTimer;
   final _RoomInitializationState _roomInitialization =
       _RoomInitializationState();
 
@@ -140,12 +161,15 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
   void _scheduleRoomTransitionFailSafe({
     required RoomId room,
     required int token,
+    required int transitionEpoch,
   }) {
     _roomTransitionFailSafeTimer?.cancel();
     _roomTransitionFailSafeTimer = Timer(
       const Duration(milliseconds: 1200),
       () {
-        if (!mounted || !_isActiveRoomInitialization(token, room)) {
+        if (!mounted ||
+            !_isActiveRoomInitialization(token, room) ||
+            !_isActiveTransition(transitionEpoch, room)) {
           return;
         }
 
@@ -153,15 +177,34 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
           return;
         }
 
-        if (!_characterFrameReady) {
-          setState(() {
-            _characterFrameReady = true;
-          });
-        }
-
         if (!_characterAssetsReady) {
           setState(() {
             _characterAssetsReady = true;
+          });
+        }
+
+        if (widget.characterManager.spriteController.textureFrame == null) {
+          final waitStartedAt = _characterFrameWaitStartedAt;
+          if (waitStartedAt != null &&
+              DateTime.now().difference(waitStartedAt) >=
+                  _characterFrameHardTimeout) {
+            _abortTransitionAndRestoreSourceRoom(
+              source: 'MainRoomScreen._roomTransitionFailSafe.timeout',
+            );
+            return;
+          }
+
+          _scheduleRoomTransitionFailSafe(
+            room: room,
+            token: token,
+            transitionEpoch: transitionEpoch,
+          );
+          return;
+        }
+
+        if (!_characterFrameReady) {
+          setState(() {
+            _characterFrameReady = true;
           });
         }
 
@@ -187,6 +230,7 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
         }
 
         _awaitingTransitionCharacterFrame = false;
+        _characterFrameWaitStartedAt = null;
         _dismissRoomTransitionOverlay();
       },
     );
@@ -196,6 +240,89 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
     return mounted &&
         _roomInitialization.token == token &&
         widget.roomManager.currentRoom == room;
+  }
+
+  bool _isActiveTransition(int transitionEpoch, RoomId room) {
+    return mounted &&
+        _activeTransitionEpoch == transitionEpoch &&
+        _activeTransitionTargetRoom == room;
+  }
+
+  void _forceResetTransitionState() {
+    renderLog(
+      'MainRoomScreen',
+      'TRANSITION_FORCE_RESET epoch=$_activeTransitionEpoch '
+          'target=${_activeTransitionTargetRoom?.name ?? 'null'} '
+          'source=${_activeTransitionSourceRoom?.name ?? 'null'}',
+    );
+    _roomTransitionOverlayReleaseTimer?.cancel();
+    _roomTransitionOverlayReleaseTimer = null;
+    _roomTransitionFailSafeTimer?.cancel();
+    _roomTransitionFailSafeTimer = null;
+    _roomSwitchCommittedAt = null;
+    _transitionStartedAt = null;
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _roomTransitionInProgress = false;
+      _roomTransitionOverlayVisible = false;
+      _roomTransitionBlurVisible = false;
+      _awaitingTransitionCharacterFrame = false;
+      _characterFrameWaitStartedAt = null;
+      _activeTransitionEpoch = 0;
+      _activeTransitionTargetRoom = null;
+      _activeTransitionSourceRoom = null;
+    });
+
+    Timer(_blurFadeOutDuration, () {
+      if (!mounted || _roomTransitionInProgress) {
+        return;
+      }
+      setState(() {
+        _transitionCrossfadeBackgroundAsset = null;
+        _transitionBlurBackgroundAsset = null;
+      });
+    });
+
+    _drainQueuedRoomSelection();
+  }
+
+  void _abortTransitionAndRestoreSourceRoom({required String source}) {
+    renderLog(
+      'MainRoomScreen',
+      'TRANSITION_ABORT source=$source '
+          'target=${_activeTransitionTargetRoom?.name ?? 'null'} '
+          'restoreTo=${_activeTransitionSourceRoom?.name ?? 'null'}',
+    );
+    final sourceRoom = _activeTransitionSourceRoom;
+    if (sourceRoom != null && widget.roomManager.currentRoom != sourceRoom) {
+      widget.roomManager.switchRoom(sourceRoom);
+      _beginRoomInitialization(sourceRoom, source: source);
+      unawaited(_preloadVisibleAssets());
+    }
+    _forceResetTransitionState();
+  }
+
+  void _drainQueuedRoomSelection() {
+    final queuedRoom = _queuedRoomSelection;
+    _queuedRoomSelection = null;
+    if (queuedRoom == null || queuedRoom == widget.roomManager.currentRoom) {
+      return;
+    }
+    renderLog(
+      'MainRoomScreen',
+      'QUEUE_DRAIN room=${queuedRoom.name}',
+    );
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      unawaited(_handleRoomSelected(queuedRoom));
+    });
   }
 
   void _markRoomAssetsReady({
@@ -355,6 +482,46 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
         widget.roomManager.currentRoom == room;
   }
 
+  void _requestRoomSelectionWarmup(RoomId room) {
+    if (_roomTransitionInProgress || widget.roomManager.currentRoom == room) {
+      return;
+    }
+
+    final token = ++_roomSelectionWarmupToken;
+    _pendingSelectionWarmupRoom = room;
+    _pendingSelectionWarmupFuture = () async {
+      try {
+        if (roomHasReadyCharacterAssets(room)) {
+          final targetCharacter = widget.characterManager.characterForRoom(
+            room,
+          );
+          await widget.assetLoader.prepareCharacterPlayback(targetCharacter);
+        }
+
+        if (!mounted ||
+            _roomSelectionWarmupToken != token ||
+            _pendingSelectionWarmupRoom != room) {
+          return !roomHasReadyCharacterAssets(room);
+        }
+
+        return _preloadAssetsForRoom(room);
+      } catch (_) {
+        return !roomHasReadyCharacterAssets(room);
+      }
+    }();
+  }
+
+  Future<bool>? _takeRoomSelectionWarmup(RoomId room) {
+    if (_pendingSelectionWarmupRoom != room) {
+      return null;
+    }
+
+    final warmupFuture = _pendingSelectionWarmupFuture;
+    _pendingSelectionWarmupRoom = null;
+    _pendingSelectionWarmupFuture = null;
+    return warmupFuture;
+  }
+
   Future<bool> _preloadAssetsForRoom(RoomId room) async {
     final roomConfig = roomConfigMap[room]!;
     final targetBackgroundAsset = _backgroundAssetForRoom(room);
@@ -389,12 +556,6 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
         return false;
       }
 
-      if (_transitionOverlayBackgroundAsset != targetBackgroundAsset) {
-        setState(() {
-          _transitionOverlayBackgroundAsset = targetBackgroundAsset;
-        });
-      }
-
       return true;
     }
 
@@ -407,40 +568,105 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
       return false;
     }
 
-    if (_transitionOverlayBackgroundAsset != targetBackgroundAsset) {
-      setState(() {
-        _transitionOverlayBackgroundAsset = targetBackgroundAsset;
-      });
-    }
-
     return true;
   }
 
   Future<void> _handleRoomSelected(RoomId room) async {
-    if (_roomTransitionSelectionLocked ||
-        widget.roomManager.currentRoom == room) {
+    if (_roomTransitionInProgress) {
+      final startedAt = _transitionStartedAt;
+      if (startedAt != null &&
+          DateTime.now().difference(startedAt) >= _maxTransitionDuration) {
+        _forceResetTransitionState();
+      } else {
+        _queuedRoomSelection = room;
+        if (mounted && !_roomTransitionBlurVisible) {
+          setState(() {
+            _roomTransitionBlurVisible = true;
+          });
+        }
+        return;
+      }
+    }
+
+    if (widget.roomManager.currentRoom == room) {
       return;
     }
 
     final shouldWaitForCharacterFrame = roomHasReadyCharacterAssets(room);
+    final sourceRoom = widget.roomManager.currentRoom;
+    final transitionEpoch = ++_transitionEpochCounter;
+    renderLog(
+      'MainRoomScreen',
+      'TRANSITION_START epoch=$transitionEpoch '
+          '${sourceRoom.name}→${room.name} '
+          'waitForCharacter=$shouldWaitForCharacterFrame',
+    );
+    var roomReady = !shouldWaitForCharacterFrame;
+    CharacterDefinition? targetCharacter;
 
     setState(() {
-      _roomTransitionSelectionLocked = true;
       _roomTransitionInProgress = true;
-      _roomTransitionOverlayVisible = true;
+      _roomTransitionOverlayVisible = false;
+      _roomTransitionBlurVisible = true;
+      _transitionBlurBackgroundAsset = _backgroundAssetForRoom(sourceRoom);
       _characterAssetsReady = !shouldWaitForCharacterFrame;
       _characterFrameReady = !shouldWaitForCharacterFrame;
       _awaitingTransitionCharacterFrame = shouldWaitForCharacterFrame;
-      _roomTransitionOverlayFullyVisible = false;
-      _roomTransitionDismissPending = false;
-      _transitionOverlayBackgroundAsset = _backgroundAssetForRoom(
-        widget.roomManager.currentRoom,
-      );
+      _characterFrameWaitStartedAt = shouldWaitForCharacterFrame
+          ? DateTime.now()
+          : null;
+      _transitionStartedAt = DateTime.now();
+      _activeTransitionEpoch = transitionEpoch;
+      _activeTransitionTargetRoom = room;
+      _activeTransitionSourceRoom = sourceRoom;
     });
+    _roomTransitionOverlayReleaseTimer?.cancel();
+    _roomTransitionOverlayReleaseTimer = null;
+    _roomSwitchCommittedAt = null;
 
     _visibleAssetsRequestToken += 1;
     unawaited(widget.soundManager.stopAllRoomAudio());
+
+    try {
+      final warmupFuture = _takeRoomSelectionWarmup(room);
+      roomReady = await (warmupFuture ?? _preloadAssetsForRoom(room));
+    } catch (_) {
+      roomReady = !shouldWaitForCharacterFrame;
+    }
+
+    if (shouldWaitForCharacterFrame) {
+      targetCharacter = widget.characterManager.characterForRoom(room);
+      try {
+        await widget.assetLoader.prepareCharacterPlayback(targetCharacter);
+      } catch (_) {
+        // Best effort only; post-switch readiness gate is authoritative.
+      }
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    if (!_isActiveTransition(transitionEpoch, room)) {
+      _forceResetTransitionState();
+      return;
+    }
+
+    final nextRoomBackgroundAsset = _backgroundAssetForRoom(room);
+    setState(() {
+      _transitionBlurBackgroundAsset = nextRoomBackgroundAsset;
+      _transitionCrossfadeBackgroundAsset = nextRoomBackgroundAsset;
+      _roomTransitionOverlayVisible = true;
+    });
+
+    await Future<void>.delayed(_roomCrossfadeInDuration + _roomSwitchHoldDuration);
+    if (!mounted || !_isActiveTransition(transitionEpoch, room)) {
+      _forceResetTransitionState();
+      return;
+    }
+
     widget.roomManager.switchRoom(room);
+    _roomSwitchCommittedAt = DateTime.now();
     _beginRoomInitialization(
       room,
       source: 'MainRoomScreen._handleRoomSelected',
@@ -451,55 +677,98 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
       _scheduleRoomTransitionFailSafe(
         room: room,
         token: roomInitializationToken,
+        transitionEpoch: transitionEpoch,
       );
 
-      final targetCharacter = widget.characterManager.characterForRoom(room);
-      unawaited(
-        () async {
-          await widget.assetLoader.prepareCharacterPlayback(targetCharacter);
-          if (!mounted ||
-              !_isActiveRoomInitialization(roomInitializationToken, room)) {
-            return;
-          }
+      if (!mounted ||
+          !_isActiveRoomInitialization(roomInitializationToken, room) ||
+          !_isActiveTransition(transitionEpoch, room)) {
+        _forceResetTransitionState();
+        return;
+      }
 
-          if (!_characterAssetsReady) {
-            setState(() {
-              _characterAssetsReady = true;
-            });
-          }
+      if (!_characterAssetsReady) {
+        setState(() {
+          _characterAssetsReady = true;
+        });
+      }
 
-          _markRoomAssetsReady(
-            room: room,
-            token: roomInitializationToken,
-            source: 'MainRoomScreen._handleRoomSelected.characterReady',
-          );
-
-          unawaited(
-            widget.assetLoader.loadTextureFrame(targetCharacter.idleBlink, 0),
-          );
-        }().catchError((_) {}),
+      _markRoomAssetsReady(
+        room: room,
+        token: roomInitializationToken,
+        source: 'MainRoomScreen._handleRoomSelected.characterReady',
       );
+
+      if (targetCharacter != null) {
+        widget.characterManager.spriteController.warmupFirstTexture(
+          targetCharacter.idleBlink,
+        );
+      }
+
+      try {
+        await widget.characterManager.spriteController.firstTextureBound
+            .timeout(_characterFrameHardTimeout);
+      } catch (_) {}
+
+      if (!mounted ||
+          !_isActiveRoomInitialization(roomInitializationToken, room) ||
+          !_isActiveTransition(transitionEpoch, room)) {
+        _forceResetTransitionState();
+        return;
+      }
+
+      if (widget.characterManager.spriteController.textureFrame == null) {
+        _abortTransitionAndRestoreSourceRoom(
+          source: 'MainRoomScreen._handleRoomSelected.frameMissing',
+        );
+        return;
+      }
+
+      if (!_characterFrameReady) {
+        setState(() {
+          _characterFrameReady = true;
+        });
+      }
+
+      _awaitingTransitionCharacterFrame = false;
+      _characterFrameWaitStartedAt = null;
+      _roomTransitionBlurVisible = false;
+      _dismissRoomTransitionOverlay();
     }
 
     if (!mounted) {
       return;
     }
 
+    if (!_isActiveTransition(transitionEpoch, room)) {
+      _forceResetTransitionState();
+      return;
+    }
+
     setState(() {
-      _roomTransitionSelectionLocked = false;
+      if (!shouldWaitForCharacterFrame) {
+        _roomTransitionBlurVisible = false;
+      }
     });
 
     if (!shouldWaitForCharacterFrame) {
       _dismissRoomTransitionOverlay();
     }
 
-    unawaited(_finishRoomSelection(room));
+    unawaited(_finishRoomSelection(room, preloadedRoomReady: roomReady));
   }
 
-  Future<void> _finishRoomSelection(RoomId room) async {
+  Future<void> _finishRoomSelection(
+    RoomId room, {
+    bool? preloadedRoomReady,
+  }) async {
     var roomReady = !roomHasReadyCharacterAssets(room);
     try {
-      roomReady = await _preloadAssetsForRoom(room);
+      if (preloadedRoomReady != null) {
+        roomReady = preloadedRoomReady;
+      } else {
+        roomReady = await _preloadAssetsForRoom(room);
+      }
     } catch (_) {
       roomReady = !roomHasReadyCharacterAssets(room);
     }
@@ -570,34 +839,78 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
       return;
     }
 
-    if (frameIndex != 0) {
+    // Ignore texture notifications that arrive before the target room switch
+    // is committed. Those can belong to the previous room and must not end
+    // the active transition.
+    if (_roomSwitchCommittedAt == null ||
+        _activeTransitionTargetRoom != widget.roomManager.currentRoom) {
       return;
     }
 
     _roomTransitionFailSafeTimer?.cancel();
     _roomTransitionFailSafeTimer = null;
     _awaitingTransitionCharacterFrame = false;
+    _characterFrameWaitStartedAt = null;
+    _roomTransitionBlurVisible = false;
     _dismissRoomTransitionOverlay();
   }
 
   void _dismissRoomTransitionOverlay() {
-    if (!_roomTransitionInProgress && !_roomTransitionOverlayVisible) {
+    if (!_roomTransitionInProgress) {
       return;
     }
 
-    if (_roomTransitionOverlayVisible && !_roomTransitionOverlayFullyVisible) {
-      _roomTransitionDismissPending = true;
-      return;
+    final transitionStartedAt = _transitionStartedAt;
+    if (transitionStartedAt != null) {
+      final elapsedSinceStart = DateTime.now().difference(transitionStartedAt);
+      final remainingBlurTime =
+          _minimumBlurVisibilityDuration - elapsedSinceStart;
+      if (remainingBlurTime > Duration.zero) {
+        _roomTransitionOverlayReleaseTimer?.cancel();
+        _roomTransitionOverlayReleaseTimer = Timer(remainingBlurTime, () {
+          if (!mounted) {
+            return;
+          }
+          _dismissRoomTransitionOverlay();
+        });
+        return;
+      }
     }
+
+    final durationMs = _transitionStartedAt != null
+        ? DateTime.now().difference(_transitionStartedAt!).inMilliseconds
+        : -1;
+    renderLog(
+      'MainRoomScreen',
+      'TRANSITION_END epoch=$_activeTransitionEpoch durationMs=$durationMs',
+    );
 
     setState(() {
       _roomTransitionOverlayVisible = false;
+      _roomTransitionBlurVisible = false;
       _roomTransitionInProgress = false;
-      _roomTransitionDismissPending = false;
+      _transitionStartedAt = null;
+      _characterFrameWaitStartedAt = null;
+      _activeTransitionEpoch = 0;
+      _activeTransitionTargetRoom = null;
+      _activeTransitionSourceRoom = null;
     });
 
+    _roomSwitchCommittedAt = null;
+    _roomTransitionOverlayReleaseTimer?.cancel();
+    _roomTransitionOverlayReleaseTimer = null;
     _roomTransitionFailSafeTimer?.cancel();
     _roomTransitionFailSafeTimer = null;
+
+    Timer(_blurFadeOutDuration, () {
+      if (!mounted || _roomTransitionInProgress) {
+        return;
+      }
+      setState(() {
+        _transitionCrossfadeBackgroundAsset = null;
+        _transitionBlurBackgroundAsset = null;
+      });
+    });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) {
@@ -607,39 +920,15 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
       _maybeCompleteRoomInitialization(
         source: 'MainRoomScreen._dismissRoomTransitionOverlay',
       );
+
+      _drainQueuedRoomSelection();
     });
-  }
-
-  void _handleTransitionOverlayAnimationEnd() {
-    if (_roomTransitionOverlayVisible) {
-      _roomTransitionOverlayFullyVisible = true;
-      if (_roomTransitionDismissPending) {
-        _dismissRoomTransitionOverlay();
-      }
-      return;
-    }
-
-    if (_roomTransitionInProgress) {
-      return;
-    }
-
-    if (_transitionOverlayBackgroundAsset == null) {
-      return;
-    }
-
-    setState(() {
-      _roomTransitionOverlayFullyVisible = false;
-      _transitionOverlayBackgroundAsset = null;
-    });
-
-    _maybeCompleteRoomInitialization(
-      source: 'MainRoomScreen._handleTransitionOverlayAnimationEnd',
-    );
   }
 
   @override
   void dispose() {
     _roomTransitionFailSafeTimer?.cancel();
+    _roomTransitionOverlayReleaseTimer?.cancel();
     _unbindSpriteController(widget.characterManager.spriteController);
     super.dispose();
   }
@@ -725,17 +1014,26 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
                                         maintainState: true,
                                         maintainAnimation: true,
                                         maintainSize: true,
-                                        child: SpriteSequencePlayer(
-                                          key: const ValueKey<String>(
-                                            'main-room-sprite-player',
+                                        child: AnimatedOpacity(
+                                          opacity: _roomTransitionBlurVisible
+                                              ? 0
+                                              : 1,
+                                          duration: const Duration(
+                                            milliseconds: 120,
                                           ),
-                                          controller: widget
-                                              .characterManager
-                                              .spriteController,
-                                          characterLabel: widget
-                                              .characterManager
-                                              .currentCharacter
-                                              .label,
+                                          curve: Curves.easeOut,
+                                          child: SpriteSequencePlayer(
+                                            key: ValueKey<RoomId>(
+                                              widget.roomManager.currentRoom,
+                                            ),
+                                            controller: widget
+                                                .characterManager
+                                                .spriteController,
+                                            characterLabel: widget
+                                                .characterManager
+                                                .currentCharacter
+                                                .label,
+                                          ),
                                         ),
                                       ),
                                       if (roomHasReadyCharacterAssets(
@@ -780,6 +1078,59 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
                     _preloadVisibleAssets();
                   },
                 ),
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: AnimatedOpacity(
+                    duration: _roomTransitionOverlayVisible
+                        ? _roomCrossfadeInDuration
+                        : _roomCrossfadeOutDuration,
+                    curve: Curves.easeInOutCubic,
+                    opacity: _roomTransitionOverlayVisible ? 1 : 0,
+                    child: _transitionCrossfadeBackgroundAsset == null
+                        ? const SizedBox.shrink()
+                        : _RoomCrossfadeOverlay(
+                            backgroundAsset:
+                                _transitionCrossfadeBackgroundAsset!,
+                          ),
+                  ),
+                ),
+              ),
+              Positioned.fill(
+                child: IgnorePointer(
+                  ignoring: !_roomTransitionBlurVisible,
+                  child: AnimatedOpacity(
+                    duration: _roomTransitionBlurVisible
+                        ? const Duration(milliseconds: 280)
+                        : _blurFadeOutDuration,
+                    curve: _roomTransitionBlurVisible
+                        ? Curves.easeInOutCubic
+                        : Curves.easeOut,
+                    opacity: _roomTransitionBlurVisible ? 1 : 0,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: <Widget>[
+                        if (_transitionBlurBackgroundAsset != null)
+                          ImageFiltered(
+                            imageFilter: ImageFilter.blur(
+                              sigmaX: 10,
+                              sigmaY: 10,
+                            ),
+                            child: _RoomCrossfadeOverlay(
+                              backgroundAsset: _transitionBlurBackgroundAsset!,
+                            ),
+                          )
+                        else
+                          const SizedBox.shrink(),
+                        DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.1),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
               SafeArea(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(0, 28, 14, 0),
@@ -787,26 +1138,11 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
                     alignment: Alignment.topRight,
                     child: RoomNavigationBar(
                       currentRoom: widget.roomManager.currentRoom,
+                      onRoomSelectionRequested: _requestRoomSelectionWarmup,
                       onRoomSelected: (room) {
                         unawaited(_handleRoomSelected(room));
                       },
                     ),
-                  ),
-                ),
-              ),
-              Positioned.fill(
-                child: IgnorePointer(
-                  ignoring: !_roomTransitionOverlayVisible,
-                  child: AnimatedOpacity(
-                    duration: const Duration(milliseconds: 360),
-                    curve: Curves.easeInOutCubic,
-                    opacity: _roomTransitionOverlayVisible ? 1 : 0,
-                    onEnd: _handleTransitionOverlayAnimationEnd,
-                    child: _transitionOverlayBackgroundAsset == null
-                        ? const SizedBox.shrink()
-                        : _RoomTransitionOverlay(
-                            backgroundAsset: _transitionOverlayBackgroundAsset!,
-                          ),
                   ),
                 ),
               ),
@@ -818,75 +1154,21 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
   }
 }
 
-class _RoomTransitionOverlay extends StatelessWidget {
-  const _RoomTransitionOverlay({required this.backgroundAsset});
+class _RoomCrossfadeOverlay extends StatelessWidget {
+  const _RoomCrossfadeOverlay({required this.backgroundAsset});
 
   final String backgroundAsset;
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      fit: StackFit.expand,
-      children: <Widget>[
-        AnimatedSwitcher(
-          duration: const Duration(milliseconds: 320),
-          switchInCurve: Curves.easeOutQuart,
-          switchOutCurve: Curves.easeInOutCubic,
-          child: SizedBox.expand(
-            key: ValueKey<String>(backgroundAsset),
-            child: Image.asset(
-              backgroundAsset,
-              fit: BoxFit.cover,
-              alignment: Alignment.bottomCenter,
-              filterQuality: FilterQuality.medium,
-              errorBuilder: (context, error, stackTrace) {
-                return const ColoredBox(color: Color(0xFFE7DED4));
-              },
-            ),
-          ),
-        ),
-        BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.16),
-            ),
-          ),
-        ),
-        Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 240),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(28),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(28),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.28),
-                    ),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(999),
-                      child: const LinearProgressIndicator(
-                        minHeight: 14,
-                        backgroundColor: Color(0x40FFFFFF),
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          Color(0xFF7DB7FF),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
+    return Image.asset(
+      backgroundAsset,
+      fit: BoxFit.cover,
+      alignment: Alignment.bottomCenter,
+      filterQuality: FilterQuality.medium,
+      errorBuilder: (context, error, stackTrace) {
+        return const ColoredBox(color: Color(0xFFE7DED4));
+      },
     );
   }
 }

@@ -45,16 +45,18 @@ class _SpriteSequencePlayerState extends State<SpriteSequencePlayer> {
             ? widget.characterLabel
             : '${widget.characterLabel}\n${clip.name} ${widget.controller.frameIndex + 1}/${clip.effectiveFrameCount}';
         final textureFrame = widget.controller.textureFrame;
+        final displayTextureFrame = widget.controller.displayTextureFrame;
+        final hasDisplayTextureFrame = displayTextureFrame != null;
 
         final hadTexture = _everHadTexture;
         final hadFirstTextureFrame = _hasFirstTextureFrame;
-        if (textureFrame != null) {
+        if (hasDisplayTextureFrame) {
           _everHadTexture = true;
           if (!_hasFirstTextureFrame) {
             _hasFirstTextureFrame = true;
             renderLog(
               'SpriteSequencePlayer',
-              'FIRST_TEXTURE_BOUND frame=${widget.controller.frameIndex} clip=${clip?.name ?? 'null'}',
+              'FIRST_VISIBLE_TEXTURE frame=${widget.controller.frameIndex} clip=${clip?.name ?? 'null'}',
             );
           }
         }
@@ -64,25 +66,26 @@ class _SpriteSequencePlayerState extends State<SpriteSequencePlayer> {
           'BUILD #$_rebuildCount '
               'clip=${clip?.name ?? 'null'} '
               'frame=${widget.controller.frameIndex} '
-              'textureFrame=${textureFrame == null ? 'null→BLANK' : 'non-null→VISIBLE'} '
+              'textureFrame=${textureFrame == null ? 'null' : 'non-null'} '
+              'displayTextureFrame=${displayTextureFrame == null ? 'null→BLANK' : 'non-null→VISIBLE'} '
               'hasFirstTextureFrame=$_hasFirstTextureFrame '
               'everHadTexture=$hadTexture '
-              '${textureFrame == null && hadTexture ? '⚠ DISAPPEAR' : ''}',
+              '${displayTextureFrame == null && hadTexture ? '⚠ DISAPPEAR' : ''}',
         );
 
-        final child = textureFrame == null
+        final child = displayTextureFrame == null
             ? const SizedBox.shrink()
             : _TextureFrameView(
-                textureFrame: textureFrame,
+                textureFrame: displayTextureFrame,
                 label: label,
                 frameIndex: widget.controller.frameIndex,
               );
 
         final gatedChild = AnimatedOpacity(
-          opacity: _hasFirstTextureFrame ? 1 : 0,
+          opacity: hasDisplayTextureFrame ? 1 : 0,
           duration: hadFirstTextureFrame
               ? Duration.zero
-              : const Duration(milliseconds: 120),
+              : const Duration(milliseconds: 80),
           curve: Curves.easeOut,
           child: child,
         );

@@ -22,14 +22,19 @@ class SpriteController extends ChangeNotifier {
 
   AssetLoader? _assetLoader;
   TextureFrame? _textureFrame;
+  TextureFrame? _displayFallbackTextureFrame;
   Object? _pendingTextureRequestToken;
   int _playbackRevision = 0;
   bool _isDisposed = false;
-  final Completer<void> _firstTextureBoundCompleter = Completer<void>();
+  bool _allowDisplayFallback = false;
+  Completer<void> _firstTextureBoundCompleter = Completer<void>();
 
   SequenceClip? get clip => sequenceController.clip;
   int get frameIndex => sequenceController.frameIndex;
   TextureFrame? get textureFrame => _textureFrame;
+  TextureFrame? get displayTextureFrame =>
+      _textureFrame ??
+      (_allowDisplayFallback ? _displayFallbackTextureFrame : null);
   String? get currentFramePath => sequenceController.currentFramePath;
   bool get hasFirstTextureBound =>
       _firstTextureBoundCompleter.isCompleted || _textureFrame != null;
@@ -69,22 +74,32 @@ class SpriteController extends ChangeNotifier {
   }
 
   void warmupFirstTexture(SequenceClip seedClip) {
-    if (hasFirstTextureBound || _isDisposed || _assetLoader == null) return;
+    if (hasFirstTextureBound || _isDisposed || _assetLoader == null) {
+      return;
+    }
     unawaited(_resolveFirstTextureFromSeed(seedClip));
   }
 
   Future<void> _resolveFirstTextureFromSeed(SequenceClip seedClip) async {
     final assetLoader = _assetLoader;
+    final capturedRevision = _playbackRevision;
     if (assetLoader == null || _isDisposed || hasFirstTextureBound) return;
     renderLog(
       'SpriteController',
       'warmupFirstTexture AWAIT clip=${seedClip.name} frame=0',
     );
     final textureFrame = await assetLoader.loadTextureFrame(seedClip, 0);
-    if (_isDisposed || hasFirstTextureBound || textureFrame == null) return;
+    if (_isDisposed ||
+        _playbackRevision != capturedRevision ||
+        hasFirstTextureBound ||
+        textureFrame == null) {
+      return;
+    }
     final textureChanged = !identical(_textureFrame, textureFrame);
     final wasNull = _textureFrame == null;
     _textureFrame = textureFrame;
+    _displayFallbackTextureFrame = null;
+    _allowDisplayFallback = false;
     if (wasNull && textureChanged && !_firstTextureBoundCompleter.isCompleted) {
       _firstTextureBoundCompleter.complete();
       renderLog(
@@ -95,10 +110,23 @@ class SpriteController extends ChangeNotifier {
         listener();
       }
     }
-    if (textureChanged) notifyListeners();
+    if (textureChanged) {
+      notifyListeners();
+    }
     for (final listener in _textureFrameResolvedListeners) {
       listener(0);
     }
+  }
+
+  void resetForRoom() {
+    _displayFallbackTextureFrame = _textureFrame;
+    _textureFrame = null;
+    _pendingTextureRequestToken = null;
+    _playbackRevision += 1;
+    _allowDisplayFallback = _displayFallbackTextureFrame != null;
+    _firstTextureBoundCompleter = Completer<void>();
+    renderLog('SpriteController', 'resetForRoom rev=$_playbackRevision');
+    notifyListeners();
   }
 
   void addTextureFrameResolvedListener(ValueChanged<int> listener) {
@@ -180,6 +208,8 @@ class SpriteController extends ChangeNotifier {
     final textureChanged = !identical(_textureFrame, textureFrame);
     final wasNull = _textureFrame == null;
     _textureFrame = textureFrame;
+    _displayFallbackTextureFrame = null;
+    _allowDisplayFallback = false;
 
     if (wasNull && textureChanged && !_firstTextureBoundCompleter.isCompleted) {
       _firstTextureBoundCompleter.complete();

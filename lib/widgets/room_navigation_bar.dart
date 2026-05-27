@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -9,10 +10,12 @@ class RoomNavigationBar extends StatefulWidget {
   const RoomNavigationBar({
     super.key,
     required this.currentRoom,
+    required this.onRoomSelectionRequested,
     required this.onRoomSelected,
   });
 
   final RoomId currentRoom;
+  final ValueChanged<RoomId> onRoomSelectionRequested;
   final ValueChanged<RoomId> onRoomSelected;
 
   @override
@@ -20,19 +23,48 @@ class RoomNavigationBar extends StatefulWidget {
 }
 
 class _RoomNavigationBarState extends State<RoomNavigationBar> {
+  static const Duration _menuCloseDuration = Duration(milliseconds: 250);
+
   bool _isOpen = false;
+  bool _selectionCommitPending = false;
 
   void _toggleOpen() {
+    if (_selectionCommitPending) {
+      return;
+    }
+
     setState(() {
       _isOpen = !_isOpen;
     });
   }
 
   void _handleRoomSelected(RoomId room) {
-    widget.onRoomSelected(room);
+    if (_selectionCommitPending) {
+      return;
+    }
+
+    widget.onRoomSelectionRequested(room);
+
+    if (!_isOpen) {
+      widget.onRoomSelected(room);
+      return;
+    }
+
     setState(() {
       _isOpen = false;
+      _selectionCommitPending = true;
     });
+
+    unawaited(
+      Future<void>.delayed(_menuCloseDuration, () {
+        if (!mounted) {
+          return;
+        }
+
+        _selectionCommitPending = false;
+        widget.onRoomSelected(room);
+      }),
+    );
   }
 
   @override

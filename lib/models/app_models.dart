@@ -298,8 +298,6 @@ const List<RoomId> roomNavigationOrder = <RoomId>[
 ];
 
 const Set<RoomId> roomsWithReadyCharacterAssets = <RoomId>{
-  RoomId.bedroom,
-  RoomId.baloon,
   RoomId.wardrobe,
   RoomId.rocket,
 };

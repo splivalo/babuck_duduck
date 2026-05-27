@@ -258,6 +258,7 @@ class CharacterManager extends ChangeNotifier {
     _pendingIdleAllowWhileInitializing = false;
     setState(CharacterLifecycleState.roomSelected);
     setState(CharacterLifecycleState.assetsLoading);
+    spriteController.resetForRoom();
     sequenceController.clear();
     _logRoomLifecycle('ROOM_INIT_START', source: source);
     notifyListeners();
