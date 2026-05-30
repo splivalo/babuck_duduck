@@ -13,7 +13,6 @@ class SoundManager {
   }) : _reactionConfig = reactionConfig ?? buildReactionSoundConfig(),
        _animationEventConfig =
            animationEventConfig ?? buildAnimationEventSoundConfig(),
-       _channelPlayers = <AudioChannel, AudioPlayer>{},
        _channelRequestTokens = <AudioChannel, int>{
          for (final channel in AudioChannel.values) channel: 0,
        };
@@ -21,7 +20,13 @@ class SoundManager {
   final Set<String> _preloadedAssets = <String>{};
   final Map<String, ReactionSoundConfig> _reactionConfig;
   final Map<String, AnimationEventSoundConfig> _animationEventConfig;
-  final Map<AudioChannel, AudioPlayer> _channelPlayers;
+  final Map<String, AudioPlayer> _cuePlayers = <String, AudioPlayer>{};
+  final Map<String, Future<AudioPlayer?>> _cuePlayerPreparations =
+      <String, Future<AudioPlayer?>>{};
+  final Map<AudioChannel, AudioPlayer?> _activeChannelPlayer =
+      <AudioChannel, AudioPlayer?>{
+        for (final channel in AudioChannel.values) channel: null,
+      };
   final Map<AudioChannel, int> _channelRequestTokens;
   final Map<String, DateTime> _lastReusableCuePlayAt = <String, DateTime>{};
   final Map<String, String> _resolvedAssetPaths = <String, String>{};
@@ -103,19 +108,14 @@ class SoundManager {
   }
 
   Future<void> preloadForCharacter(RoomId roomId, CharacterId character) async {
-    final assets = <String>{
+    final cues = <TimedSoundCue>[
       for (final zone in TouchZone.values)
-        ...reactionConfig(
-          roomId,
-          character,
-          zone,
-        ).cues.map((cue) => cue.assetPath),
-      for (final config in _animationEventConfig.values)
-        ...config.cues.map((cue) => cue.assetPath),
-    };
+        ...reactionConfig(roomId, character, zone).cues,
+      for (final config in _animationEventConfig.values) ...config.cues,
+    ];
 
-    for (final asset in assets) {
-      await _resolvePlayableAssetPath(asset);
+    for (final cue in cues) {
+      unawaited(_ensureCuePlayer(cue));
     }
   }
 
@@ -153,15 +153,21 @@ class SoundManager {
       return;
     }
 
-    final player = await _channelPlayer(channel);
+    final player = await _ensureCuePlayer(cue);
+    if (player == null || _channelRequestTokens[channel] != requestToken) {
+      return;
+    }
+
+    final previousActive = _activeChannelPlayer[channel];
+    if (previousActive != null && previousActive != player) {
+      try {
+        await previousActive.stop();
+      } catch (_) {}
+    }
+    _activeChannelPlayer[channel] = player;
 
     try {
       await player.stop();
-      if (_channelRequestTokens[channel] != requestToken) {
-        return;
-      }
-
-      await player.setSource(AssetSource(_assetSourcePath(assetPath)));
       if (_channelRequestTokens[channel] != requestToken) {
         return;
       }
@@ -171,15 +177,55 @@ class SoundManager {
         return;
       }
 
-      await player.seek(cue.startOffset);
-      if (_channelRequestTokens[channel] != requestToken) {
-        return;
+      if (cue.startOffset > Duration.zero) {
+        await player.seek(cue.startOffset);
+        if (_channelRequestTokens[channel] != requestToken) {
+          return;
+        }
       }
 
       await player.resume();
     } catch (_) {
       return;
     }
+  }
+
+  Future<AudioPlayer?> _ensureCuePlayer(TimedSoundCue cue) async {
+    final assetPath = await _resolvePlayableAssetPath(cue.assetPath);
+    final cached = _cuePlayers[assetPath];
+    if (cached != null) {
+      return cached;
+    }
+
+    final inFlight = _cuePlayerPreparations[assetPath];
+    if (inFlight != null) {
+      return inFlight;
+    }
+
+    final preparation = _prepareCuePlayer(assetPath);
+    _cuePlayerPreparations[assetPath] = preparation;
+    final player = await preparation;
+    _cuePlayerPreparations.remove(assetPath);
+    if (player != null) {
+      _cuePlayers[assetPath] = player;
+    }
+    return player;
+  }
+
+  Future<AudioPlayer?> _prepareCuePlayer(String assetPath) async {
+    final player = AudioPlayer();
+    try {
+      await player.setReleaseMode(ReleaseMode.stop);
+    } catch (_) {}
+    try {
+      await player.setSource(AssetSource(_assetSourcePath(assetPath)));
+    } catch (_) {
+      try {
+        await player.dispose();
+      } catch (_) {}
+      return null;
+    }
+    return player;
   }
 
   int _nextChannelRequestToken(AudioChannel channel) {
@@ -195,28 +241,15 @@ class SoundManager {
       }
 
       _nextChannelRequestToken(lowerChannel);
-      final player = _channelPlayers[lowerChannel];
-      if (player == null) {
+      final activePlayer = _activeChannelPlayer[lowerChannel];
+      if (activePlayer == null) {
         continue;
       }
       try {
-        await player.stop();
+        await activePlayer.stop();
       } catch (_) {}
+      _activeChannelPlayer[lowerChannel] = null;
     }
-  }
-
-  Future<AudioPlayer> _channelPlayer(AudioChannel channel) async {
-    final existingPlayer = _channelPlayers[channel];
-    if (existingPlayer != null) {
-      return existingPlayer;
-    }
-
-    final player = AudioPlayer();
-    _channelPlayers[channel] = player;
-    try {
-      await player.setReleaseMode(ReleaseMode.stop);
-    } catch (_) {}
-    return player;
   }
 
   bool _isRoomScopedAnimationEvent(String eventName) {
@@ -279,22 +312,28 @@ class SoundManager {
 
     for (final channel in AudioChannel.values) {
       _nextChannelRequestToken(channel);
-      final player = _channelPlayers[channel];
-      if (player == null) {
+      final activePlayer = _activeChannelPlayer[channel];
+      if (activePlayer == null) {
         continue;
       }
       try {
-        await player.stop();
+        await activePlayer.stop();
       } catch (_) {}
+      _activeChannelPlayer[channel] = null;
     }
   }
 
   void dispose() {
     _lastReusableCuePlayAt.clear();
     _resolvedAssetPaths.clear();
-    for (final player in _channelPlayers.values) {
+    for (final entry in _activeChannelPlayer.entries) {
+      _activeChannelPlayer[entry.key] = null;
+    }
+    for (final player in _cuePlayers.values) {
       unawaited(player.dispose());
     }
+    _cuePlayers.clear();
+    _cuePlayerPreparations.clear();
   }
 }
 

@@ -389,6 +389,10 @@ class CharacterManager extends ChangeNotifier {
       reactionClip,
       onCompleted: () {
         _reactionPlaying = false;
+        // Reactions are authored so their last frame matches idleBlink frame 0
+        // byte-for-byte; idleSway content has its own slight width offset.
+        // Forcing blink here guarantees a seamless reaction→idle transition.
+        _forceNextIdleBlink = true;
         notifyListeners();
         requestIdleStart(
           source: 'CharacterManager.handleZoneTap.onCompleted',
@@ -442,6 +446,11 @@ class CharacterManager extends ChangeNotifier {
 
   @visibleForTesting
   SequenceClip debugTakeNextIdleClip() => _takeNextIdleClip();
+
+  @visibleForTesting
+  void debugForceAnimationAllowed() {
+    setState(CharacterLifecycleState.animationAllowed);
+  }
 
   SequenceClip _takeNextIdleClip() {
     if (_isRoomJustEntered) {

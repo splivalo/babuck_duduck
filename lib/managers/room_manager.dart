@@ -6,10 +6,10 @@ class RoomManager extends ChangeNotifier {
   static const List<RoomId> _navigationOrder = roomNavigationOrder;
 
   RoomId _currentRoom = RoomId.bedroom;
-  BedroomMood _bedroomMood = BedroomMood.day;
+  final Map<RoomId, BedroomMood> _roomMoods = <RoomId, BedroomMood>{};
 
   RoomId get currentRoom => _currentRoom;
-  BedroomMood get bedroomMood => _bedroomMood;
+  BedroomMood get bedroomMood => _roomMoods[_currentRoom] ?? BedroomMood.day;
   RoomConfig get currentRoomConfig => roomConfigMap[_currentRoom]!;
   CharacterId get currentRoomCharacter => currentRoomConfig.character;
   RoomId get nextRoom =>
@@ -22,11 +22,11 @@ class RoomManager extends ChangeNotifier {
           _navigationOrder.length];
 
   String get currentBackgroundAsset {
-    return currentRoomConfig.backgroundAsset(_bedroomMood);
+    return currentRoomConfig.backgroundAsset(bedroomMood);
   }
 
   String get roomLabel {
-    return currentRoomConfig.labelForMood(_bedroomMood);
+    return currentRoomConfig.labelForMood(bedroomMood);
   }
 
   void switchRoom(RoomId room) {
@@ -38,10 +38,10 @@ class RoomManager extends ChangeNotifier {
   }
 
   void toggleBedroomMood() {
-    if (_currentRoom != RoomId.bedroom) {
+    if (!currentRoomConfig.supportsMoodToggle) {
       return;
     }
-    _bedroomMood = _bedroomMood == BedroomMood.day
+    _roomMoods[_currentRoom] = bedroomMood == BedroomMood.day
         ? BedroomMood.night
         : BedroomMood.day;
     notifyListeners();

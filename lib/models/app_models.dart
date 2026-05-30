@@ -121,6 +121,30 @@ class SpriteSheetFrameSource extends FrameSource {
   final int frameCount;
 }
 
+/// Describes where the tappable lamp sits inside a room background image.
+///
+/// Coordinates are expressed as fractions of the *background image* (not the
+/// screen), so the tap target lands on the lamp regardless of how `BoxFit.cover`
+/// crops the image on a given phone. [imageAspectRatio] is the intrinsic
+/// width / height of the background asset, needed to reproduce the cover crop.
+class RoomLampConfig {
+  const RoomLampConfig({
+    required this.imageFractionX,
+    required this.imageFractionY,
+    required this.imageAspectRatio,
+    this.tapSizeFactor = 0.42,
+    this.minTapSize = 136.0,
+    this.maxTapSize = 184.0,
+  });
+
+  final double imageFractionX;
+  final double imageFractionY;
+  final double imageAspectRatio;
+  final double tapSizeFactor;
+  final double minTapSize;
+  final double maxTapSize;
+}
+
 class RoomConfig {
   const RoomConfig({
     required this.room,
@@ -130,6 +154,7 @@ class RoomConfig {
     this.stageScale = 1.0,
     this.stageLiftFactor = 0.086,
     this.backgroundNightAsset,
+    this.lamp,
   });
 
   final RoomId room;
@@ -139,6 +164,7 @@ class RoomConfig {
   final double stageScale;
   final double stageLiftFactor;
   final String? backgroundNightAsset;
+  final RoomLampConfig? lamp;
 
   bool get supportsMoodToggle => backgroundNightAsset != null;
 
@@ -266,6 +292,11 @@ const Map<RoomId, RoomConfig> roomConfigMap = <RoomId, RoomConfig>{
     backgroundDayAsset: 'assets/backgrounds/bedroom_day.jpg',
     stageLiftFactor: 0.1,
     backgroundNightAsset: 'assets/backgrounds/bedroom_night.jpg',
+    lamp: RoomLampConfig(
+      imageFractionX: 0.505,
+      imageFractionY: 0.43,
+      imageAspectRatio: 1536 / 2720,
+    ),
   ),
   RoomId.wardrobe: RoomConfig(
     room: RoomId.wardrobe,
@@ -287,6 +318,12 @@ const Map<RoomId, RoomConfig> roomConfigMap = <RoomId, RoomConfig>{
     character: CharacterId.dudak,
     backgroundDayAsset: 'assets/backgrounds/rocket_room.jpg',
     stageLiftFactor: 0.1,
+    backgroundNightAsset: 'assets/backgrounds/rocket_room_night.jpg',
+    lamp: RoomLampConfig(
+      imageFractionX: 0.335,
+      imageFractionY: 0.29,
+      imageAspectRatio: 1536 / 2750,
+    ),
   ),
 };
 
@@ -488,8 +525,8 @@ _roomCharacterAnimationTunings = <String, RoomCharacterAnimationTuning>{
       CharacterAnimationId.idleBlink: AnimationMigrationStatus.migrated,
       CharacterAnimationId.idleSway: AnimationMigrationStatus.migrated,
       CharacterAnimationId.reactionHead: AnimationMigrationStatus.migrated,
-      CharacterAnimationId.reactionBelly: AnimationMigrationStatus.pngOnly,
-      CharacterAnimationId.reactionLegs: AnimationMigrationStatus.pngOnly,
+      CharacterAnimationId.reactionBelly: AnimationMigrationStatus.migrated,
+      CharacterAnimationId.reactionLegs: AnimationMigrationStatus.migrated,
     },
     frameTimings: <CharacterAnimationId, List<AnimationFrameTiming>>{
       CharacterAnimationId.idleBlink: _buildBlinkFrameTimings(
@@ -685,12 +722,25 @@ final Map<String, RoomCharacterSoundTuning> _roomCharacterSoundTunings =
               TimedSoundCue(
                 assetPath: 'assets/sounds/dudak/noo.wav',
                 playbackRate: 1.0,
-                startOffset: Duration(milliseconds: 0),
+                delay: Duration(milliseconds: 0),
               ),
             ],
           ),
-          TouchZone.belly: ReactionSoundConfig(cues: <TimedSoundCue>[]),
-          TouchZone.legs: ReactionSoundConfig(cues: <TimedSoundCue>[]),
+          TouchZone.belly: ReactionSoundConfig(
+            playbackBehavior: SoundPlaybackBehavior.restart,
+            cues: <TimedSoundCue>[
+              TimedSoundCue(assetPath: 'assets/sounds/dudak/belly_laugh_wardrobe.wav'),
+            ],
+          ),
+          TouchZone.legs: ReactionSoundConfig(
+            playbackBehavior: SoundPlaybackBehavior.restart,
+            cues: <TimedSoundCue>[
+              TimedSoundCue(
+                assetPath: 'assets/sounds/dudak/legs_giggle.wav',
+                playbackRate: 1.2,
+              ),
+            ],
+          ),
         },
         animationEventSounds: <String, AnimationEventSoundConfig>{
           'idle_swing_dudak_wardrobe': AnimationEventSoundConfig(
@@ -699,7 +749,7 @@ final Map<String, RoomCharacterSoundTuning> _roomCharacterSoundTunings =
               TimedSoundCue(
                 assetPath: 'assets/sounds/dudak/giggle.wav',
                 playbackRate: 0.8,
-                startOffset: Duration(milliseconds: 20),
+                delay: Duration(milliseconds: 20),
               ),
             ],
           ),

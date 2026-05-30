@@ -12,7 +12,9 @@ import 'services/asset_loader.dart';
 import 'services/sound_manager.dart';
 
 class BabuckDuduckApp extends StatefulWidget {
-  const BabuckDuduckApp({super.key});
+  const BabuckDuduckApp({super.key, this.assetLoader});
+
+  final AssetLoader? assetLoader;
 
   @override
   State<BabuckDuduckApp> createState() => _BabuckDuduckAppState();
@@ -22,7 +24,7 @@ class _BabuckDuduckAppState extends State<BabuckDuduckApp>
     with WidgetsBindingObserver {
   final RoomManager _roomManager = RoomManager();
   final SoundManager _soundManager = SoundManager();
-  final AssetLoader _assetLoader = AssetLoader();
+  late final AssetLoader _assetLoader = widget.assetLoader ?? AssetLoader();
   late final CharacterManager _characterManager = CharacterManager(
     soundManager: _soundManager,
   );
@@ -76,59 +78,59 @@ class _BabuckDuduckAppState extends State<BabuckDuduckApp>
     var startupSucceeded = true;
 
     _characterManager.syncRoom(_roomManager.currentRoom);
-    onProgress(0.12);
+    onProgress(0.05);
 
-    final currentRoomConfig = roomConfigMap[_roomManager.currentRoom]!;
-    final extraBackgroundAssets = currentRoomConfig.supportsMoodToggle
-        ? <String>[
-            currentRoomConfig.backgroundDayAsset,
-            currentRoomConfig.backgroundNightAsset!,
-          ]
-        : const <String>[];
+    final allBackgrounds = <String>{};
+    for (final config in roomConfigMap.values) {
+      allBackgrounds.add(config.backgroundDayAsset);
+      if (config.backgroundNightAsset != null) {
+        allBackgrounds.add(config.backgroundNightAsset!);
+      }
+    }
 
+    final backgroundList = allBackgrounds.toList(growable: false);
     try {
-      await _assetLoader
-          .preloadRoomScene(
-            context: context,
-            currentBackgroundAsset: _roomManager.currentBackgroundAsset,
-            nextBackgroundAsset: roomConfigMap[_roomManager.nextRoom]!
-                .backgroundAsset(BedroomMood.day),
-            previousBackgroundAsset: roomConfigMap[_roomManager.previousRoom]!
-                .backgroundAsset(BedroomMood.day),
-            extraBackgroundAssets: extraBackgroundAssets,
-          )
-          .timeout(const Duration(seconds: 3));
+      await Future.wait(
+        backgroundList.map(
+          (asset) => _assetLoader.preloadRoomBackground(context, asset),
+        ),
+      ).timeout(const Duration(milliseconds: 1500));
     } catch (_) {
       startupSucceeded = false;
     }
     if (!context.mounted) {
       return;
     }
-    onProgress(0.58);
+    onProgress(0.35);
 
-    if (roomHasReadyCharacterAssets(_roomManager.currentRoom)) {
-      try {
-        await _assetLoader
-            .preloadCharacter(_characterManager.currentCharacter, context)
-            .timeout(const Duration(seconds: 3));
-      } catch (_) {
-        startupSucceeded = false;
-      }
-      if (!context.mounted) {
-        return;
-      }
-      onProgress(0.86);
+    final characterRooms = roomNavigationOrder
+        .where(roomHasReadyCharacterAssets)
+        .toList(growable: false);
 
-      try {
-        await _soundManager
-            .preloadForCharacter(
-              _roomManager.currentRoom,
-              _roomManager.currentRoomCharacter,
-            )
-            .timeout(const Duration(seconds: 2));
-      } catch (_) {
-        startupSucceeded = false;
-      }
+    try {
+      await Future.wait(
+        characterRooms.map((room) {
+          final character = _characterManager.characterForRoom(room);
+          return _assetLoader.preloadCharacter(character, context);
+        }),
+      ).timeout(const Duration(milliseconds: 2500));
+    } catch (_) {
+      startupSucceeded = false;
+    }
+    if (!context.mounted) {
+      return;
+    }
+    onProgress(0.80);
+
+    try {
+      await Future.wait(
+        characterRooms.map((room) {
+          final characterId = roomConfigMap[room]!.character;
+          return _soundManager.preloadForCharacter(room, characterId);
+        }),
+      ).timeout(const Duration(milliseconds: 1000));
+    } catch (_) {
+      startupSucceeded = false;
     }
 
     _startupAssetsReady = startupSucceeded;
