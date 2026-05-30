@@ -141,15 +141,21 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
                                     clipBehavior: Clip.none,
                                     children: <Widget>[
                                       if (hasCharacter)
-                                        SpriteSequencePlayer(
-                                          key: ValueKey<RoomId>(currentRoom),
-                                          controller: widget
-                                              .characterManager
-                                              .spriteController,
-                                          characterLabel: widget
-                                              .characterManager
-                                              .currentCharacter
-                                              .label,
+                                        _NightTintedCharacter(
+                                          grade: roomConfig.nightGrade,
+                                          active:
+                                              widget.roomManager.bedroomMood ==
+                                              BedroomMood.night,
+                                          child: SpriteSequencePlayer(
+                                            key: ValueKey<RoomId>(currentRoom),
+                                            controller: widget
+                                                .characterManager
+                                                .spriteController,
+                                            characterLabel: widget
+                                                .characterManager
+                                                .currentCharacter
+                                                .label,
+                                          ),
                                         ),
                                       if (hasCharacter)
                                         CharacterTouchZones(
@@ -200,6 +206,104 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
       },
     );
   }
+}
+
+/// Grades the character so it looks like it sits in the dark while the room is
+/// in night mood, without touching the sprite artwork.
+///
+/// Rather than uniformly multiplying every pixel (which crushes bright eyes and
+/// flattens shading), this remaps the sprite's tonal range with a per-channel
+/// linear color matrix anchored at white: pure white maps to [grade.highlight]
+/// and mid-grey maps to [grade.midtone]. Keeping the highlight white leaves the
+/// brightest pixels (eyes / whites) untouched like the original, while a dark,
+/// cool midtone dims and cools the body and crushes the shadows so the shading
+/// still shows. Alpha is left untouched, so transparency is preserved.
+///
+/// [active] drives a smooth fade: the grade animates in/out by lerping the
+/// highlight from white and the midtone from mid-grey (which together form the
+/// identity / daylight matrix). A null [grade] disables the effect entirely.
+class _NightTintedCharacter extends StatelessWidget {
+  const _NightTintedCharacter({
+    required this.grade,
+    required this.active,
+    required this.child,
+  });
+
+  final NightGrade? grade;
+  final bool active;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final grade = this.grade;
+    if (grade == null) {
+      return child;
+    }
+
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(end: active ? 1.0 : 0.0),
+      duration: const Duration(milliseconds: 450),
+      curve: Curves.easeInOut,
+      child: child,
+      builder: (context, t, child) {
+        if (t <= 0.0) {
+          return child!;
+        }
+        final highlight = Color.lerp(
+          const Color(0xFFFFFFFF),
+          grade.highlight,
+          t,
+        )!;
+        final midtone = Color.lerp(const Color(0xFF808080), grade.midtone, t)!;
+        final saturation = 1.0 + (grade.saturation - 1.0) * t;
+        return ColorFiltered(
+          colorFilter: _nightColorMatrix(highlight, midtone, saturation),
+          child: child,
+        );
+      },
+    );
+  }
+}
+
+/// Builds a color matrix that first desaturates the sprite toward its own
+/// luminance by [saturation] (1.0 = full colour, 0.0 = grey), then applies a
+/// per-channel night grade anchored at white: a fully bright input channel
+/// (255) maps to [highlight] and a mid-grey input (128) maps to [midtone], with
+/// the line extrapolated and clamped for the rest. Keeping [highlight] white
+/// leaves bright pixels (eyes / whites) untouched. Alpha is left untouched.
+///
+/// The two stages compose into a single matrix: because the night grade is a
+/// per-channel scale `d_c` plus offset `o_c`, the combined row is the
+/// saturation row scaled by `d_c`, with `o_c` in the offset column. Channel
+/// components are read as normalized doubles (0..1) via the modern `Color` API;
+/// matrix inputs/outputs are on the 0..255 scale.
+ColorFilter _nightColorMatrix(Color highlight, Color midtone, double saturation) {
+  // Night grade: out = scale * in + offset through (255 -> highlight) and
+  // (128 -> midtone), per channel.
+  double scale(double hi, double mid) => (hi - mid) * 255.0 / (255.0 - 128.0);
+  final dR = scale(highlight.r, midtone.r);
+  final dG = scale(highlight.g, midtone.g);
+  final dB = scale(highlight.b, midtone.b);
+  final oR = midtone.r * 255.0 - dR * 128.0;
+  final oG = midtone.g * 255.0 - dG * 128.0;
+  final oB = midtone.b * 255.0 - dB * 128.0;
+
+  // Saturation: blend each channel toward Rec. 709 luminance.
+  const lr = 0.2126, lg = 0.7152, lb = 0.0722;
+  final s = saturation;
+  final inv = 1.0 - s;
+  final sat = <double>[
+    inv * lr + s, inv * lg, inv * lb, // R row
+    inv * lr, inv * lg + s, inv * lb, // G row
+    inv * lr, inv * lg, inv * lb + s, // B row
+  ];
+
+  return ColorFilter.matrix(<double>[
+    dR * sat[0], dR * sat[1], dR * sat[2], 0, oR,
+    dG * sat[3], dG * sat[4], dG * sat[5], 0, oG,
+    dB * sat[6], dB * sat[7], dB * sat[8], 0, oB,
+    0, 0, 0, 1, 0,
+  ]);
 }
 
 /// Invisible tap target placed over the lamp drawn into a room background.

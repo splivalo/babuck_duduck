@@ -1,3 +1,5 @@
+import 'dart:ui' show Color;
+
 import 'package:flutter/foundation.dart';
 
 enum AppFlow { splash, mainRoom }
@@ -145,6 +147,37 @@ class RoomLampConfig {
   final double maxTapSize;
 }
 
+/// Night-lighting grade for a character sprite.
+///
+/// Instead of uniformly darkening every pixel (which also dims bright eyes and
+/// flattens shading), this remaps the sprite's tonal range with a per-channel
+/// linear color matrix anchored at white: pure-white input ([255]) maps to
+/// [highlight], and mid-grey input ([128]) maps to [midtone]; the line is
+/// extrapolated for the rest and clamped. Keeping [highlight] pure white leaves
+/// the brightest pixels (eyes / whites) untouched like the original, while a
+/// dark, cool [midtone] dims and cools the body and crushes the shadows so the
+/// shading still reads. Alpha is untouched, so transparency is preserved.
+class NightGrade {
+  const NightGrade({
+    required this.highlight,
+    required this.midtone,
+    this.saturation = 1.0,
+  });
+
+  /// What the brightest pixels become at night. Keep this white (0xFFFFFFFF) to
+  /// leave highlights such as eyes untouched like the original artwork.
+  final Color highlight;
+
+  /// What mid-tone pixels become at night — sets how dark and how cool the body
+  /// of the character looks. Darker / bluer = deeper night.
+  final Color midtone;
+
+  /// How much of the character's own colour to keep at night, where 1.0 is the
+  /// full original colour and 0.0 is fully grey. Lower values mute saturated
+  /// hues (e.g. a too-green body) so the night tint reads cleanly.
+  final double saturation;
+}
+
 class RoomConfig {
   const RoomConfig({
     required this.room,
@@ -155,6 +188,7 @@ class RoomConfig {
     this.stageLiftFactor = 0.086,
     this.backgroundNightAsset,
     this.lamp,
+    this.nightGrade,
   });
 
   final RoomId room;
@@ -165,6 +199,11 @@ class RoomConfig {
   final double stageLiftFactor;
   final String? backgroundNightAsset;
   final RoomLampConfig? lamp;
+
+  /// Optional night-lighting grade applied to the character while the room is
+  /// in night mood, to make the sprite look like it sits in the dark without
+  /// touching the artwork. Null means the character is drawn unchanged.
+  final NightGrade? nightGrade;
 
   bool get supportsMoodToggle => backgroundNightAsset != null;
 
@@ -323,6 +362,11 @@ const Map<RoomId, RoomConfig> roomConfigMap = <RoomId, RoomConfig>{
       imageFractionX: 0.335,
       imageFractionY: 0.29,
       imageAspectRatio: 1536 / 2750,
+    ),
+    nightGrade: NightGrade(
+      highlight: Color(0xFFFFFFFF),
+      midtone: Color.fromARGB(255, 97, 102, 123),
+      saturation: 0.8,
     ),
   ),
 };
@@ -729,7 +773,9 @@ final Map<String, RoomCharacterSoundTuning> _roomCharacterSoundTunings =
           TouchZone.belly: ReactionSoundConfig(
             playbackBehavior: SoundPlaybackBehavior.restart,
             cues: <TimedSoundCue>[
-              TimedSoundCue(assetPath: 'assets/sounds/dudak/belly_laugh_wardrobe.wav'),
+              TimedSoundCue(
+                assetPath: 'assets/sounds/dudak/belly_laugh_wardrobe.wav',
+              ),
             ],
           ),
           TouchZone.legs: ReactionSoundConfig(
