@@ -17,6 +17,7 @@ enum CharacterSoundType { laugh, belly, head, legs }
 enum CharacterAnimationId {
   idleBlink,
   idleSway,
+  idleYawn,
   reactionHead,
   reactionBelly,
   reactionLegs,
@@ -336,12 +337,20 @@ const Map<RoomId, RoomConfig> roomConfigMap = <RoomId, RoomConfig>{
       imageFractionY: 0.43,
       imageAspectRatio: 1536 / 2720,
     ),
+    nightGrade: NightGrade(
+      highlight: Color(0xFFFFFFFF),
+      midtone: Color.fromARGB(255, 80, 95, 120),
+      saturation: 0.8,
+    ),
   ),
   RoomId.wardrobe: RoomConfig(
     room: RoomId.wardrobe,
     label: 'Wardrobe',
     character: CharacterId.dudak,
     backgroundDayAsset: 'assets/backgrounds/wardrobe_room.jpg',
+    // Display the character (and its procedural shadow) 10% smaller, paired
+    // with the 0.90-scaled idle atlases (see rocket for rationale).
+    stageScale: 0.90,
     stageLiftFactor: 0.1,
   ),
   RoomId.baloon: RoomConfig(
@@ -356,6 +365,10 @@ const Map<RoomId, RoomConfig> roomConfigMap = <RoomId, RoomConfig>{
     label: 'Rocket',
     character: CharacterId.dudak,
     backgroundDayAsset: 'assets/backgrounds/rocket_room.jpg',
+    // Display the character (and its procedural shadow) 10% smaller. Paired
+    // with the 0.90-scaled idle atlases this reclaims texture RAM without a
+    // visible quality loss, since the on-screen pixel density is preserved.
+    stageScale: 0.90,
     stageLiftFactor: 0.1,
     backgroundNightAsset: 'assets/backgrounds/rocket_room_night.jpg',
     lamp: RoomLampConfig(
@@ -379,7 +392,9 @@ const List<RoomId> roomNavigationOrder = <RoomId>[
 ];
 
 const Set<RoomId> roomsWithReadyCharacterAssets = <RoomId>{
+  RoomId.bedroom,
   RoomId.wardrobe,
+  RoomId.baloon,
   RoomId.rocket,
 };
 
@@ -397,7 +412,8 @@ String _characterRoomAssetRoot(RoomId roomId, CharacterId characterId) {
     case (RoomId.wardrobe, CharacterId.dudak):
       return 'assets/characters/dudak/wardrobe';
     case (RoomId.baloon, CharacterId.babak):
-      return 'assets/characters/babak/baloon';
+      // Baloon shares babak's bedroom atlases — no duplicate assets needed.
+      return 'assets/characters/babak/bedroom';
     case (RoomId.rocket, CharacterId.dudak):
       return 'assets/characters/dudak/rocket';
     default:
@@ -413,6 +429,8 @@ String _animationDirectoryName(CharacterAnimationId animationId) {
       return 'idle_blink';
     case CharacterAnimationId.idleSway:
       return 'idle_sway';
+    case CharacterAnimationId.idleYawn:
+      return 'idle_yawn';
     case CharacterAnimationId.reactionHead:
       return 'reaction_head';
     case CharacterAnimationId.reactionBelly:
@@ -427,6 +445,8 @@ int _defaultFrameCountForAnimation(CharacterAnimationId animationId) {
     case CharacterAnimationId.idleBlink:
       return 6;
     case CharacterAnimationId.idleSway:
+      return 8;
+    case CharacterAnimationId.idleYawn:
       return 8;
     case CharacterAnimationId.reactionHead:
       return 8;
@@ -473,6 +493,8 @@ int _fpsForAnimation(CharacterAnimationId animationId) {
       return 12;
     case CharacterAnimationId.idleSway:
       return 10;
+    case CharacterAnimationId.idleYawn:
+      return 12;
     case CharacterAnimationId.reactionHead:
     case CharacterAnimationId.reactionBelly:
     case CharacterAnimationId.reactionLegs:
@@ -495,14 +517,6 @@ class BlinkTimingControl {
   final int blinkFrameMs;
   final int reopenHoldMs;
 }
-
-const BlinkTimingControl _babakRoomBlinkTiming = BlinkTimingControl(
-  frameCount: 6,
-  openHoldMs: 1500,
-  openHoldTickMs: 75,
-  blinkFrameMs: 24,
-  reopenHoldMs: 64,
-);
 
 List<AnimationFrameTiming> _buildBlinkFrameTimings(BlinkTimingControl control) {
   final openFrameRepeats =
@@ -539,26 +553,115 @@ List<AnimationFrameTiming> _buildBlinkFrameTimings(BlinkTimingControl control) {
   return playbackFrames;
 }
 
+/// Stride for the rocket belly playback preview.
+///   1 = full 33-frame playback (original)
+///   2 = play every other frame
+/// Purely a playback/visual setting — it does NOT change how many frames the
+/// atlas holds in memory (RAM is unchanged). It lets us preview how a shorter
+/// belly re-export would look before re-rendering it. Set back to 1 to revert.
+const int _rocketBellyPreviewStride = 1;
+
+/// Builds rocket belly playback timings that step through the source frames
+/// with [stride], lengthening each shown frame proportionally so the overall
+/// speed is preserved. The final source frame is always included so the
+/// reaction→idle seam (last belly frame == idle blink frame 0) stays intact.
+List<AnimationFrameTiming> _rocketBellyFrameTimings({required int stride}) {
+  const totalSourceFrames = 33;
+  const firstFrameMs = 158;
+  const frameMs = 71;
+  final timings = <AnimationFrameTiming>[
+    const AnimationFrameTiming(frameIndex: 0, durationMs: firstFrameMs),
+  ];
+  for (var index = stride; index < totalSourceFrames; index += stride) {
+    timings.add(
+      AnimationFrameTiming(frameIndex: index, durationMs: frameMs * stride),
+    );
+  }
+  if (timings.last.frameIndex != totalSourceFrames - 1) {
+    timings.add(
+      AnimationFrameTiming(
+        frameIndex: totalSourceFrames - 1,
+        durationMs: frameMs * stride,
+      ),
+    );
+  }
+  return timings;
+}
+
 final Map<String, RoomCharacterAnimationTuning>
 _roomCharacterAnimationTunings = <String, RoomCharacterAnimationTuning>{
   _roomCharacterTuningKey(
     RoomId.bedroom,
     CharacterId.babak,
   ): RoomCharacterAnimationTuning(
+    frameCounts: const <CharacterAnimationId, int>{
+      CharacterAnimationId.idleBlink: 7,
+      CharacterAnimationId.idleSway: 17,
+      CharacterAnimationId.idleYawn: 26,
+      CharacterAnimationId.reactionHead: 18,
+    },
     frameTimings: <CharacterAnimationId, List<AnimationFrameTiming>>{
       CharacterAnimationId.idleBlink: _buildBlinkFrameTimings(
-        _babakRoomBlinkTiming,
+        const BlinkTimingControl(
+          frameCount: 7,
+          openHoldMs: 1500,
+          openHoldTickMs: 75,
+          blinkFrameMs: 50,
+          reopenHoldMs: 80,
+        ),
       ),
+      CharacterAnimationId.idleYawn: <AnimationFrameTiming>[
+        // Hold rest pose briefly before the yawn motion starts, so the
+        // blink→yawn transition is not an abrupt pose change.
+        AnimationFrameTiming(frameIndex: 0, durationMs: 120),
+        AnimationFrameTiming(frameIndex: 0, durationMs: 120),
+        AnimationFrameTiming(frameIndex: 0, durationMs: 120),
+        for (var i = 1; i < 26; i++)
+          AnimationFrameTiming(frameIndex: i, durationMs: 80),
+      ],
+      CharacterAnimationId.reactionHead: <AnimationFrameTiming>[
+        for (var i = 0; i < 18; i++)
+          AnimationFrameTiming(frameIndex: i, durationMs: 36),
+      ],
+    },
+    migrationStatuses: const <CharacterAnimationId, AnimationMigrationStatus>{
+      CharacterAnimationId.idleBlink: AnimationMigrationStatus.migrated,
+      CharacterAnimationId.idleSway: AnimationMigrationStatus.migrated,
+      CharacterAnimationId.idleYawn: AnimationMigrationStatus.migrated,
+      CharacterAnimationId.reactionHead: AnimationMigrationStatus.migrated,
+    },
+    animationEvents: const <CharacterAnimationId, List<AnimationTimelineEvent>>{
+      CharacterAnimationId.idleYawn: <AnimationTimelineEvent>[
+        AnimationTimelineEvent(
+          name: 'yawn_babak',
+          timeMs: 0,
+          repeatEachLoop: false,
+        ),
+      ],
     },
   ),
   _roomCharacterTuningKey(
     RoomId.baloon,
     CharacterId.babak,
   ): RoomCharacterAnimationTuning(
+    frameCounts: const <CharacterAnimationId, int>{
+      CharacterAnimationId.idleBlink: 7,
+      CharacterAnimationId.idleSway: 17,
+    },
     frameTimings: <CharacterAnimationId, List<AnimationFrameTiming>>{
       CharacterAnimationId.idleBlink: _buildBlinkFrameTimings(
-        _babakRoomBlinkTiming,
+        const BlinkTimingControl(
+          frameCount: 7,
+          openHoldMs: 1500,
+          openHoldTickMs: 75,
+          blinkFrameMs: 50,
+          reopenHoldMs: 80,
+        ),
       ),
+    },
+    migrationStatuses: const <CharacterAnimationId, AnimationMigrationStatus>{
+      CharacterAnimationId.idleBlink: AnimationMigrationStatus.migrated,
+      CharacterAnimationId.idleSway: AnimationMigrationStatus.migrated,
     },
   ),
   _roomCharacterTuningKey(
@@ -592,10 +695,11 @@ _roomCharacterAnimationTunings = <String, RoomCharacterAnimationTuning>{
   _roomCharacterTuningKey(
     RoomId.rocket,
     CharacterId.dudak,
-  ): const RoomCharacterAnimationTuning(
+  ): RoomCharacterAnimationTuning(
     frameCounts: <CharacterAnimationId, int>{
       CharacterAnimationId.idleBlink: 9,
       CharacterAnimationId.idleSway: 25,
+      CharacterAnimationId.idleYawn: 22,
       CharacterAnimationId.reactionHead: 18,
       CharacterAnimationId.reactionBelly: 33,
       CharacterAnimationId.reactionLegs: 17,
@@ -603,6 +707,7 @@ _roomCharacterAnimationTunings = <String, RoomCharacterAnimationTuning>{
     migrationStatuses: <CharacterAnimationId, AnimationMigrationStatus>{
       CharacterAnimationId.idleBlink: AnimationMigrationStatus.migrated,
       CharacterAnimationId.idleSway: AnimationMigrationStatus.migrated,
+      CharacterAnimationId.idleYawn: AnimationMigrationStatus.migrated,
       CharacterAnimationId.reactionHead: AnimationMigrationStatus.migrated,
       CharacterAnimationId.reactionBelly: AnimationMigrationStatus.migrated,
       CharacterAnimationId.reactionLegs: AnimationMigrationStatus.migrated,
@@ -639,41 +744,9 @@ _roomCharacterAnimationTunings = <String, RoomCharacterAnimationTuning>{
         AnimationFrameTiming(frameIndex: 16, durationMs: 71),
         AnimationFrameTiming(frameIndex: 17, durationMs: 71),
       ],
-      CharacterAnimationId.reactionBelly: <AnimationFrameTiming>[
-        AnimationFrameTiming(frameIndex: 0, durationMs: 158),
-        AnimationFrameTiming(frameIndex: 1, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 2, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 3, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 4, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 5, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 6, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 7, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 8, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 9, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 10, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 11, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 12, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 13, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 14, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 15, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 16, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 17, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 18, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 19, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 20, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 21, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 22, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 23, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 24, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 25, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 26, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 27, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 28, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 29, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 30, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 31, durationMs: 71),
-        AnimationFrameTiming(frameIndex: 32, durationMs: 71),
-      ],
+      CharacterAnimationId.reactionBelly: _rocketBellyFrameTimings(
+        stride: _rocketBellyPreviewStride,
+      ),
       CharacterAnimationId.reactionLegs: <AnimationFrameTiming>[
         AnimationFrameTiming(frameIndex: 0, durationMs: 152),
         AnimationFrameTiming(frameIndex: 1, durationMs: 71),
@@ -697,6 +770,13 @@ _roomCharacterAnimationTunings = <String, RoomCharacterAnimationTuning>{
     animationEvents: <CharacterAnimationId, List<AnimationTimelineEvent>>{
       CharacterAnimationId.idleSway: <AnimationTimelineEvent>[
         AnimationTimelineEvent(name: 'idle_swing_dudak', timeMs: 180),
+      ],
+      CharacterAnimationId.idleYawn: <AnimationTimelineEvent>[
+        AnimationTimelineEvent(
+          name: 'yawn_dudak',
+          timeMs: 0,
+          repeatEachLoop: false,
+        ),
       ],
     },
   ),
@@ -838,6 +918,11 @@ final Map<String, RoomCharacterSoundTuning> _roomCharacterSoundTunings =
           'idle_swing_dudak': AnimationEventSoundConfig(
             cues: <TimedSoundCue>[
               TimedSoundCue(assetPath: 'assets/sounds/dudak/idle_swing.mp3'),
+            ],
+          ),
+          'yawn_dudak': AnimationEventSoundConfig(
+            cues: <TimedSoundCue>[
+              TimedSoundCue(assetPath: 'assets/sounds/dudak/dudak_yawn.wav'),
             ],
           ),
         },
@@ -1179,6 +1264,7 @@ class CharacterDefinition {
     required this.reactionHead,
     required this.reactionBelly,
     required this.reactionLegs,
+    this.idleYawn,
   });
 
   final CharacterId id;
@@ -1188,6 +1274,10 @@ class CharacterDefinition {
   final SequenceClip reactionHead;
   final SequenceClip reactionBelly;
   final SequenceClip reactionLegs;
+
+  /// Night-only idle. Present only for characters that have a yawn animation
+  /// (currently Dudak in the rocket room). Null elsewhere.
+  final SequenceClip? idleYawn;
 
   SequenceClip reactionFor(TouchZone zone) {
     switch (zone) {
@@ -1203,6 +1293,7 @@ class CharacterDefinition {
   List<SequenceClip> get preloadClips => <SequenceClip>[
     idleBlink,
     idleSway,
+    ?idleYawn,
     reactionHead,
     reactionBelly,
     reactionLegs,

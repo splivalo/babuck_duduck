@@ -15,7 +15,9 @@ class TextureFrame {
       sourceRect = null,
       frameWidth = null,
       frameHeight = null,
-      shadowAssetPath = assetPath;
+      shadowAssetPath = assetPath,
+      shadowSourceRect = null,
+      bottomInset = 0.0;
 
   const TextureFrame.spriteSheet({
     required this.image,
@@ -23,6 +25,8 @@ class TextureFrame {
     required this.frameWidth,
     required this.frameHeight,
     this.shadowAssetPath,
+    this.shadowSourceRect,
+    this.bottomInset = 0.0,
   }) : assetPath = null;
 
   final String? assetPath;
@@ -31,6 +35,16 @@ class TextureFrame {
   final double? frameWidth;
   final double? frameHeight;
   final String? shadowAssetPath;
+
+  /// Atlas rect of the current frame's silhouette, used to draw the contact
+  /// shadow. Tracks the frame being drawn so the shadow follows the character's
+  /// motion (sway, yawn, reactions) instead of staying frozen on frame 0.
+  final Rect? shadowSourceRect;
+
+  /// Fraction of the frame height that is empty below the character's feet.
+  /// The renderer shifts the sprite and its shadow down by this so the feet
+  /// rest on the floor regardless of art padding (0 for art with no padding).
+  final double bottomInset;
 }
 
 class _SpriteSheetAsset {
@@ -39,16 +53,18 @@ class _SpriteSheetAsset {
     required this.frames,
     this.playbackFrames,
     this.animationEvents,
+    this.bottomInset = 0.0,
   });
 
   final ui.Image image;
   final List<SpriteSheetFrameRect> frames;
   final List<AnimationFrameTiming>? playbackFrames;
   final List<AnimationTimelineEvent>? animationEvents;
+  final double bottomInset;
 }
 
 class AssetLoader {
-  static const int _maxActiveSpriteSheets = 8;
+  static const int _maxActiveSpriteSheets = 7;
   static const int _maxSceneBackgrounds = 3;
   static const int _maxPngSequenceProbeFrames = 240;
 
@@ -117,6 +133,58 @@ class AssetLoader {
   Future<void> prepareCharacterPlayback(CharacterDefinition character) async {
     for (final clip in character.preloadClips) {
       await _prepareClip(clip);
+    }
+  }
+
+  /// Lightweight startup warm: decodes and caches only the idle atlases
+  /// (blink + sway) so the first idle shows instantly, without decoding the
+  /// heavy reaction atlases. Reactions are decoded later, per room, by
+  /// [activateCharacterRoom] on room entry — so startup never holds both
+  /// character rooms' full atlas sets in memory at once.
+  Future<void> preloadCharacterIdles(
+    CharacterDefinition character,
+    BuildContext context,
+  ) async {
+    final configuration = createLocalImageConfiguration(context);
+    await _prepareClip(character.idleBlink);
+    await _prepareClip(character.idleSway);
+    await _preloadClip(character.idleBlink, configuration);
+    await _preloadClip(character.idleSway, configuration);
+  }
+
+  /// Scopes the sprite-sheet cache to a single room: disposes every resident
+  /// atlas that does not belong to [character], then decodes and caches this
+  /// room's atlases so its reactions play instantly (no decode hitch on tap).
+  ///
+  /// Called on room entry so two character rooms never stay resident at once —
+  /// keeping peak texture memory at one room (~330 MB) instead of ~600 MB.
+  /// The previous room is freed first, so switching rooms re-decodes the new
+  /// room's atlases rather than holding both.
+  Future<void> activateCharacterRoom(CharacterDefinition character) async {
+    final clips = character.preloadClips;
+    retainSpriteSheetsForClips(clips);
+    for (final clip in clips) {
+      await _prepareClip(clip);
+    }
+  }
+
+  /// Disposes every resident sprite sheet whose atlas is not used by [clips],
+  /// freeing its decoded GPU image. Pass an empty iterable to free them all.
+  void retainSpriteSheetsForClips(Iterable<SequenceClip> clips) {
+    final keepKeys = <String>{};
+    for (final clip in clips) {
+      final frameSource = clip.frameSource;
+      if (frameSource is SpriteSheetFrameSource) {
+        keepKeys.add(_spriteSheetCacheKey(frameSource));
+      }
+    }
+
+    final staleKeys = _spriteSheetCache.keys
+        .where((key) => !keepKeys.contains(key))
+        .toList(growable: false);
+    for (final key in staleKeys) {
+      final evicted = _spriteSheetCache.remove(key);
+      evicted?.image.dispose();
     }
   }
 
@@ -243,6 +311,25 @@ class AssetLoader {
 
   TextureFrame? _loadTextureFrameSync(SequenceClip clip, int index) {
     final sourceFrameIndex = clip.sourceFrameIndexAt(index);
+    final frameSource = clip.frameSource;
+
+    // Prefer the resident atlas — packing every frame into one texture is the
+    // whole point of the migration (RAM). Only fall back to a PNG-sequence frame
+    // when the atlas isn't resident yet (e.g. mid-load) or for PNG-only clips.
+    if (frameSource is SpriteSheetFrameSource) {
+      final spriteSheet = _loadResidentSpriteSheet(frameSource);
+      if (spriteSheet != null && sourceFrameIndex < spriteSheet.frames.length) {
+        final frame = spriteSheet.frames[sourceFrameIndex];
+        return TextureFrame.spriteSheet(
+          image: spriteSheet.image,
+          sourceRect: _frameRect(frame),
+          frameWidth: frame.width.toDouble(),
+          frameHeight: frame.height.toDouble(),
+          shadowSourceRect: _frameRect(frame),
+          bottomInset: spriteSheet.bottomInset,
+        );
+      }
+    }
 
     if (_pngSequenceFramePathsCache.containsKey(clip.assetDirectory)) {
       final cachedPngFrame = _loadPngTextureFrameSync(clip, sourceFrameIndex);
@@ -251,29 +338,15 @@ class AssetLoader {
       }
     }
 
-    final frameSource = clip.frameSource;
-    if (frameSource is! SpriteSheetFrameSource) {
-      return null;
-    }
-
-    final spriteSheet = _loadResidentSpriteSheet(frameSource);
-    if (spriteSheet == null || sourceFrameIndex >= spriteSheet.frames.length) {
-      return null;
-    }
-
-    final frame = spriteSheet.frames[sourceFrameIndex];
-    return TextureFrame.spriteSheet(
-      image: spriteSheet.image,
-      sourceRect: Rect.fromLTWH(
-        frame.x.toDouble(),
-        frame.y.toDouble(),
-        frame.width.toDouble(),
-        frame.height.toDouble(),
-      ),
-      frameWidth: frame.width.toDouble(),
-      frameHeight: frame.height.toDouble(),
-    );
+    return null;
   }
+
+  Rect _frameRect(SpriteSheetFrameRect frame) => Rect.fromLTWH(
+    frame.x.toDouble(),
+    frame.y.toDouble(),
+    frame.width.toDouble(),
+    frame.height.toDouble(),
+  );
 
   Future<TextureFrame?> _loadTextureFrameAsync(
     SequenceClip clip,
@@ -293,14 +366,11 @@ class AssetLoader {
         final frame = spriteSheet.frames[sourceFrameIndex];
         return TextureFrame.spriteSheet(
           image: spriteSheet.image,
-          sourceRect: Rect.fromLTWH(
-            frame.x.toDouble(),
-            frame.y.toDouble(),
-            frame.width.toDouble(),
-            frame.height.toDouble(),
-          ),
+          sourceRect: _frameRect(frame),
           frameWidth: frame.width.toDouble(),
           frameHeight: frame.height.toDouble(),
+          shadowSourceRect: _frameRect(frame),
+          bottomInset: spriteSheet.bottomInset,
         );
       }
 
@@ -487,11 +557,13 @@ class AssetLoader {
     }
   }
 
+  String _spriteSheetCacheKey(SpriteSheetFrameSource frameSource) =>
+      '${frameSource.imageAssetPath}|${frameSource.metadataAssetPath}';
+
   Future<_SpriteSheetAsset?> _loadSpriteSheet(
     SpriteSheetFrameSource frameSource,
   ) async {
-    final cacheKey =
-        '${frameSource.imageAssetPath}|${frameSource.metadataAssetPath}';
+    final cacheKey = _spriteSheetCacheKey(frameSource);
 
     if (_missingSpriteSheetCache.contains(cacheKey)) {
       return null;
@@ -526,8 +598,7 @@ class AssetLoader {
   _SpriteSheetAsset? _loadResidentSpriteSheet(
     SpriteSheetFrameSource frameSource,
   ) {
-    final cacheKey =
-        '${frameSource.imageAssetPath}|${frameSource.metadataAssetPath}';
+    final cacheKey = _spriteSheetCacheKey(frameSource);
     final cachedAsset = _spriteSheetCache.remove(cacheKey);
     if (cachedAsset == null) {
       return null;
@@ -567,6 +638,7 @@ class AssetLoader {
         frames: metadata.frames,
         playbackFrames: metadata.playbackFrames,
         animationEvents: metadata.animationEvents,
+        bottomInset: metadata.bottomInset,
       );
     } catch (_) {
       return null;
@@ -617,10 +689,17 @@ class AssetLoader {
         .map(AnimationTimelineEvent.fromJson)
         .toList(growable: false);
 
+    final bottomInset = switch (decoded) {
+      Map<String, dynamic> map when map['bottomInset'] is num =>
+        (map['bottomInset'] as num).toDouble(),
+      _ => 0.0,
+    };
+
     return _ParsedSpriteSheetMetadata(
       frames: frames,
       playbackFrames: playbackFrames.isEmpty ? null : playbackFrames,
       animationEvents: animationEvents.isEmpty ? null : animationEvents,
+      bottomInset: bottomInset,
     );
   }
 
@@ -664,9 +743,11 @@ class _ParsedSpriteSheetMetadata {
     required this.frames,
     required this.playbackFrames,
     required this.animationEvents,
+    this.bottomInset = 0.0,
   });
 
   final List<SpriteSheetFrameRect> frames;
   final List<AnimationFrameTiming>? playbackFrames;
   final List<AnimationTimelineEvent>? animationEvents;
+  final double bottomInset;
 }

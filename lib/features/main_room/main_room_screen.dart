@@ -47,6 +47,7 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
     _enterRoom(
       widget.roomManager.currentRoom,
       source: 'MainRoomScreen.initState',
+      force: true,
     );
   }
 
@@ -60,9 +61,40 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
     }
   }
 
-  void _enterRoom(RoomId room, {required String source}) {
+  void _enterRoom(RoomId room, {required String source, bool force = false}) {
     renderLog('MainRoomScreen', 'ENTER_ROOM room=${room.name} source=$source');
-    widget.characterManager.syncRoom(room);
+    // On the very first mount the room already matches the manager's default
+    // selection, so a normal syncRoom would no-op and never initialize the
+    // character. Force it so the initial room's character shows on cold start.
+    widget.characterManager.syncRoom(room, force: force);
+    if (roomHasReadyCharacterAssets(room)) {
+      // Keep only this room's atlases resident; frees the previous character
+      // room so peak texture memory stays at one room instead of two.
+      unawaited(
+        widget.assetLoader.activateCharacterRoom(
+          widget.characterManager.currentCharacter,
+        ),
+      );
+    }
+    // Match the idle deck to the room's saved light state (blink/yawn at night,
+    // blink/sway by day) before the idle loop starts.
+    widget.characterManager.syncNightMood(
+      isNight: widget.roomManager.bedroomMood == BedroomMood.night,
+    );
+    // Decode the night background now (context-safe, after the first frame) so
+    // the first light-off doesn't pop in the night image mid-yawn. gaplessPlayback
+    // holds the day image until night decodes, which on a cold start lands ~end
+    // of the yawn and reads as a flash.
+    final nightBackground = roomConfigMap[room]!.backgroundNightAsset;
+    if (nightBackground != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          unawaited(
+            widget.assetLoader.preloadRoomBackground(context, nightBackground),
+          );
+        }
+      });
+    }
     widget.characterManager.markRoomAssetsReady(source: source);
     widget.characterManager.markCharacterAttached(source: source);
     widget.characterManager.requestIdleStart(
@@ -71,6 +103,15 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
       allowWhileInitializing: true,
     );
     widget.characterManager.completeRoomInitialization(source: source);
+  }
+
+  void _handleLampTap() {
+    widget.roomManager.toggleBedroomMood();
+    // Turning the light off triggers an immediate yawn; on triggers the day
+    // deck. Reads the mood after the toggle so it reflects the new state.
+    widget.characterManager.handleLightToggled(
+      isNight: widget.roomManager.bedroomMood == BedroomMood.night,
+    );
   }
 
   void _handleRoomSelected(RoomId room) {
@@ -185,7 +226,7 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
                 _RoomLampTarget(
                   room: currentRoom,
                   lamp: roomConfigMap[currentRoom]!.lamp!,
-                  onTap: widget.roomManager.toggleBedroomMood,
+                  onTap: _handleLampTap,
                 ),
               SafeArea(
                 child: Padding(

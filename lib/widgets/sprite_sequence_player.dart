@@ -41,9 +41,6 @@ class _SpriteSequencePlayerState extends State<SpriteSequencePlayer> {
       builder: (context, _) {
         _rebuildCount += 1;
         final clip = widget.controller.clip;
-        final label = clip == null
-            ? widget.characterLabel
-            : '${widget.characterLabel}\n${clip.name} ${widget.controller.frameIndex + 1}/${clip.effectiveFrameCount}';
         final textureFrame = widget.controller.textureFrame;
         final displayTextureFrame = widget.controller.displayTextureFrame;
         final hasDisplayTextureFrame = displayTextureFrame != null;
@@ -75,10 +72,13 @@ class _SpriteSequencePlayerState extends State<SpriteSequencePlayer> {
 
         final child = displayTextureFrame == null
             ? const SizedBox.shrink()
-            : _TextureFrameView(
-                textureFrame: displayTextureFrame,
-                label: label,
-                frameIndex: widget.controller.frameIndex,
+            : Stack(
+                fit: StackFit.expand,
+                clipBehavior: Clip.none,
+                children: <Widget>[
+                  _contactShadow(displayTextureFrame),
+                  _spriteContent(displayTextureFrame),
+                ],
               );
 
         final gatedChild = AnimatedOpacity(
@@ -164,74 +164,77 @@ class _SpriteDebugOverlay extends StatelessWidget {
   }
 }
 
-class _TextureFrameView extends StatelessWidget {
-  const _TextureFrameView({
-    required this.textureFrame,
-    required this.label,
-    required this.frameIndex,
-  });
+/// The on-floor contact shadow for [textureFrame]. Rendered outside the clip
+/// crossfade so it doesn't double up during a transition.
+Widget _contactShadow(TextureFrame textureFrame) {
+  final assetPath = textureFrame.assetPath;
+  if (assetPath != null) {
+    return _PngContactShadow(assetPath: assetPath);
+  }
 
-  final TextureFrame textureFrame;
-  final String label;
-  final int frameIndex;
+  final image = textureFrame.image;
+  final sourceRect = textureFrame.sourceRect;
+  final frameWidth = textureFrame.frameWidth;
+  final frameHeight = textureFrame.frameHeight;
+  final shadowAssetPath = textureFrame.shadowAssetPath;
+  if (image == null ||
+      sourceRect == null ||
+      frameWidth == null ||
+      frameHeight == null) {
+    return const SizedBox.shrink();
+  }
 
-  @override
-  Widget build(BuildContext context) {
-    final assetPath = textureFrame.assetPath;
-    if (assetPath != null) {
-      return Stack(
-        fit: StackFit.expand,
-        clipBehavior: Clip.none,
-        children: <Widget>[
-          _PngContactShadow(assetPath: assetPath),
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: Image.asset(
-              assetPath,
-              fit: BoxFit.contain,
-              alignment: Alignment.bottomCenter,
-              gaplessPlayback: true,
-              filterQuality: FilterQuality.medium,
-              errorBuilder: (context, error, stackTrace) {
-                return const SizedBox.shrink();
-              },
-            ),
-          ),
-        ],
-      );
-    }
+  if (shadowAssetPath != null) {
+    return _PngContactShadow(assetPath: shadowAssetPath);
+  }
 
-    final image = textureFrame.image;
-    final sourceRect = textureFrame.sourceRect;
-    final frameWidth = textureFrame.frameWidth;
-    final frameHeight = textureFrame.frameHeight;
-    final shadowAssetPath = textureFrame.shadowAssetPath;
-    if (image == null ||
-        sourceRect == null ||
-        frameWidth == null ||
-        frameHeight == null) {
-      return const SizedBox.shrink();
-    }
+  return _SpriteSheetContactShadow(
+    image: image,
+    sourceRect: textureFrame.shadowSourceRect ?? sourceRect,
+    frameWidth: frameWidth,
+    frameHeight: frameHeight,
+    bottomInset: textureFrame.bottomInset,
+  );
+}
 
-    return Stack(
-      fit: StackFit.expand,
-      clipBehavior: Clip.none,
-      children: <Widget>[
-        if (shadowAssetPath != null)
-          _PngContactShadow(assetPath: shadowAssetPath)
-        else
-          const _FallbackContactShadow(),
-        CustomPaint(
-          painter: _SpriteSheetFramePainter(
-            image: image,
-            sourceRect: sourceRect,
-            frameWidth: frameWidth,
-            frameHeight: frameHeight,
-          ),
-        ),
-      ],
+/// Just the character image for [textureFrame] (the part that cross-fades on a
+/// clip change). Excludes the shadow.
+Widget _spriteContent(TextureFrame textureFrame) {
+  final assetPath = textureFrame.assetPath;
+  if (assetPath != null) {
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Image.asset(
+        assetPath,
+        fit: BoxFit.contain,
+        alignment: Alignment.bottomCenter,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+      ),
     );
   }
+
+  final image = textureFrame.image;
+  final sourceRect = textureFrame.sourceRect;
+  final frameWidth = textureFrame.frameWidth;
+  final frameHeight = textureFrame.frameHeight;
+  if (image == null ||
+      sourceRect == null ||
+      frameWidth == null ||
+      frameHeight == null) {
+    return const SizedBox.shrink();
+  }
+
+  return CustomPaint(
+    painter: _SpriteSheetFramePainter(
+      image: image,
+      sourceRect: sourceRect,
+      frameWidth: frameWidth,
+      frameHeight: frameHeight,
+      bottomInset: textureFrame.bottomInset,
+    ),
+  );
 }
 
 class _PngContactShadow extends StatelessWidget {
@@ -247,7 +250,10 @@ class _PngContactShadow extends StatelessWidget {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final stageHeight = constraints.maxHeight;
-            final verticalOffset = -(stageHeight * 0.019);
+            // Lift the shadow up toward the feet. Increase this fraction to move
+            // the contact shadow higher (closer to the soles), decrease to drop
+            // it. Shared by all atlas characters.
+            final verticalOffset = -(stageHeight * 0.045);
             final blurSigma = (stageHeight * 0.0115).clamp(3.5, 6.5);
 
             return Transform.translate(
@@ -288,8 +294,24 @@ class _PngContactShadow extends StatelessWidget {
   }
 }
 
-class _FallbackContactShadow extends StatelessWidget {
-  const _FallbackContactShadow();
+/// Contact shadow for atlas (sprite-sheet) frames: paints the same frame as a
+/// blurred, skewed, darkened silhouette on the floor — the real character
+/// shape, not a generic ellipse. Mirrors [_PngContactShadow] but sources the
+/// frame from the atlas image + sourceRect instead of a standalone PNG.
+class _SpriteSheetContactShadow extends StatelessWidget {
+  const _SpriteSheetContactShadow({
+    required this.image,
+    required this.sourceRect,
+    required this.frameWidth,
+    required this.frameHeight,
+    this.bottomInset = 0.0,
+  });
+
+  final ui.Image image;
+  final Rect sourceRect;
+  final double frameWidth;
+  final double frameHeight;
+  final double bottomInset;
 
   @override
   Widget build(BuildContext context) {
@@ -298,26 +320,45 @@ class _FallbackContactShadow extends StatelessWidget {
       child: IgnorePointer(
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final stageWidth = constraints.maxWidth;
             final stageHeight = constraints.maxHeight;
+            // Lift the shadow up toward the feet. Increase this fraction to move
+            // the contact shadow higher (closer to the soles), decrease to drop
+            // it. Shared by all atlas characters.
+            final verticalOffset = -(stageHeight * 0.045);
+            final blurSigma = (stageHeight * 0.0115).clamp(3.5, 6.5);
 
             return Transform.translate(
-              offset: Offset(0, stageHeight * 0.0345),
-              child: Transform.scale(
-                scaleX: 0.58,
-                scaleY: 0.11,
-                child: Container(
-                  width: stageWidth * 0.5817,
-                  height: stageHeight * 0.2299,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(999),
-                    gradient: RadialGradient(
-                      colors: <Color>[
-                        Colors.black.withValues(alpha: 0.24),
-                        Colors.black.withValues(alpha: 0.08),
-                        Colors.transparent,
-                      ],
-                      stops: const <double>[0.0, 0.62, 1.0],
+              offset: Offset(0, verticalOffset),
+              child: Transform(
+                alignment: Alignment.bottomCenter,
+                transform: Matrix4.skewX(-0.5),
+                child: Transform.scale(
+                  scaleX: 1.06,
+                  scaleY: 0.26,
+                  alignment: Alignment.bottomCenter,
+                  child: ImageFiltered(
+                    imageFilter: ui.ImageFilter.blur(
+                      sigmaX: blurSigma,
+                      sigmaY: blurSigma,
+                    ),
+                    child: ColorFiltered(
+                      colorFilter: ColorFilter.mode(
+                        Colors.black.withValues(alpha: 0.16),
+                        BlendMode.srcIn,
+                      ),
+                      child: SizedBox(
+                        width: constraints.maxWidth,
+                        height: constraints.maxHeight,
+                        child: CustomPaint(
+                          painter: _SpriteSheetFramePainter(
+                            image: image,
+                            sourceRect: sourceRect,
+                            frameWidth: frameWidth,
+                            frameHeight: frameHeight,
+                            bottomInset: bottomInset,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -336,12 +377,17 @@ class _SpriteSheetFramePainter extends CustomPainter {
     required this.sourceRect,
     required this.frameWidth,
     required this.frameHeight,
+    this.bottomInset = 0.0,
   });
 
   final ui.Image image;
   final Rect sourceRect;
   final double frameWidth;
   final double frameHeight;
+
+  /// Fraction of the frame that is empty below the feet; the frame is drawn
+  /// shifted down by this much so the feet sit on the floor (see [TextureFrame]).
+  final double bottomInset;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -350,10 +396,13 @@ class _SpriteSheetFramePainter extends CustomPainter {
       Size(frameWidth, frameHeight),
       size,
     );
-    final destinationRect = Alignment.bottomCenter.inscribe(
+    final fitted = Alignment.bottomCenter.inscribe(
       fittedSizes.destination,
       Offset.zero & size,
     );
+    final destinationRect = bottomInset == 0.0
+        ? fitted
+        : fitted.shift(Offset(0, bottomInset * fitted.height));
     final paint = Paint()
       ..filterQuality = FilterQuality.medium
       ..isAntiAlias = false;
@@ -366,6 +415,7 @@ class _SpriteSheetFramePainter extends CustomPainter {
     return oldDelegate.image != image ||
         oldDelegate.sourceRect != sourceRect ||
         oldDelegate.frameWidth != frameWidth ||
-        oldDelegate.frameHeight != frameHeight;
+        oldDelegate.frameHeight != frameHeight ||
+        oldDelegate.bottomInset != bottomInset;
   }
 }

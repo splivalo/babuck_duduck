@@ -3,12 +3,29 @@ import '../models/app_models.dart';
 class TouchZoneManager {
   const TouchZoneManager();
 
-  static final List<TouchZoneLayout> _babakZones = _verticalThirdZones(
-    left: 0.22,
-    top: 0.08,
-    width: 0.56,
-    height: 0.78,
-  );
+  static const List<TouchZoneLayout> _babakZones = <TouchZoneLayout>[
+    TouchZoneLayout(
+      zone: TouchZone.head,
+      left: 0.17,
+      top: 0.37,
+      width: 0.66,
+      height: 0.24,
+    ),
+    TouchZoneLayout(
+      zone: TouchZone.belly,
+      left: 0.17,
+      top: 0.61,
+      width: 0.66,
+      height: 0.22,
+    ),
+    TouchZoneLayout(
+      zone: TouchZone.legs,
+      left: 0.20,
+      top: 0.83,
+      width: 0.60,
+      height: 0.14,
+    ),
+  ];
 
   static const List<TouchZoneLayout> _dudakZones = <TouchZoneLayout>[
     TouchZoneLayout(
@@ -34,36 +51,6 @@ class TouchZoneManager {
     ),
   ];
 
-  static const double _zoneThird = 1 / 3;
-
-  static List<TouchZoneLayout> _verticalThirdZones({
-    required double left,
-    required double top,
-    required double width,
-    required double height,
-  }) => <TouchZoneLayout>[
-    TouchZoneLayout(
-      zone: TouchZone.head,
-      left: left,
-      top: top,
-      width: width,
-      height: height * _zoneThird,
-    ),
-    TouchZoneLayout(
-      zone: TouchZone.belly,
-      left: left,
-      top: top + (height * _zoneThird),
-      width: width,
-      height: height * _zoneThird,
-    ),
-    TouchZoneLayout(
-      zone: TouchZone.legs,
-      left: left,
-      top: top + (height * _zoneThird * 2),
-      width: width,
-      height: height * _zoneThird,
-    ),
-  ];
 
   List<TouchZoneLayout> zonesForCharacter(CharacterId characterId) {
     return switch (characterId) {

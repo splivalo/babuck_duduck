@@ -111,7 +111,7 @@ class _BabuckDuduckAppState extends State<BabuckDuduckApp>
       await Future.wait(
         characterRooms.map((room) {
           final character = _characterManager.characterForRoom(room);
-          return _assetLoader.preloadCharacter(character, context);
+          return _assetLoader.preloadCharacterIdles(character, context);
         }),
       ).timeout(const Duration(milliseconds: 2500));
     } catch (_) {

@@ -31,13 +31,17 @@ class CharacterManager extends ChangeNotifier {
   SpriteSequenceController get sequenceController =>
       spriteController.sequenceController;
 
-  static const int _swayChanceDenominator = 5;
+  // 1-in-N chance the next idle is the room's "special" idle (sway by day,
+  // yawn by night) instead of a blink → 20% special / 80% blink.
+  static const int _specialIdleChanceDenominator = 5;
 
   Timer? _idleDelayTimer;
   RoomId _selectedRoom = RoomId.bedroom;
   bool _reactionPlaying = false;
   _IdleAnimationKind? _lastIdleKind;
   bool _forceNextIdleBlink = true;
+  bool _forceNextIdleYawn = false;
+  bool _nightMood = false;
   bool _isRoomJustEntered = true;
   bool _roomIsInitializing = false;
   int _idleSequenceToken = 0;
@@ -64,6 +68,11 @@ class CharacterManager extends ChangeNotifier {
             RoomId.bedroom,
             CharacterId.babak,
             CharacterAnimationId.idleSway,
+          ).toSequenceClip(),
+          idleYawn: animationConfigFor(
+            RoomId.bedroom,
+            CharacterId.babak,
+            CharacterAnimationId.idleYawn,
           ).toSequenceClip(),
           reactionHead: animationConfigFor(
             RoomId.bedroom,
@@ -166,6 +175,11 @@ class CharacterManager extends ChangeNotifier {
             RoomId.rocket,
             CharacterId.dudak,
             CharacterAnimationId.reactionLegs,
+          ).toSequenceClip(),
+          idleYawn: animationConfigFor(
+            RoomId.rocket,
+            CharacterId.dudak,
+            CharacterAnimationId.idleYawn,
           ).toSequenceClip(),
         ),
       };
@@ -272,8 +286,15 @@ class CharacterManager extends ChangeNotifier {
     _logRoomLifecycle('ROOM_ASSETS_READY', source: source);
     setState(CharacterLifecycleState.assetsReady);
     if (!spriteController.hasFirstTextureBound) {
-      spriteController.warmupFirstTexture(currentCharacter.idleBlink);
+      // Seed the first painted frame with the clip the room will open on, so
+      // there's no blink→sway/yawn jump on entry.
+      spriteController.warmupFirstTexture(
+        _idleClipForKind(_roomEntryIdleKind()),
+      );
     }
+    // The entry idle (sway/yawn) is always followed by a blink. Decode the
+    // blink atlas now so that first transition doesn't hitch on a cold entry.
+    spriteController.prefetchClip(currentCharacter.idleBlink);
   }
 
   void markCharacterAttached({required String source}) {
@@ -296,8 +317,8 @@ class CharacterManager extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool syncRoom(RoomId room) {
-    if (_selectedRoom == room && !_roomIsInitializing) {
+  bool syncRoom(RoomId room, {bool force = false}) {
+    if (!force && _selectedRoom == room && !_roomIsInitializing) {
       return false;
     }
 
@@ -370,6 +391,32 @@ class CharacterManager extends ChangeNotifier {
       source: source,
       forceRestart: true,
       allowWhileInitializing: true,
+    );
+  }
+
+  /// Syncs the day/night idle deck without interrupting the current idle.
+  /// Called on room entry so a room left with the light off keeps using the
+  /// night deck (blink/yawn) instead of the day deck (blink/sway).
+  void syncNightMood({required bool isNight}) {
+    _nightMood = isNight;
+  }
+
+  /// Called when the player toggles the room light. Turning the light off makes
+  /// the character yawn right away (if it has a yawn clip); the night idle deck
+  /// (80% blink / 20% yawn) then takes over. Turning it back on reverts to the
+  /// day deck (blink/sway) without interrupting the current idle.
+  void handleLightToggled({required bool isNight}) {
+    _nightMood = isNight;
+    if (!isNight || currentCharacter.idleYawn == null) {
+      return;
+    }
+    _forceNextIdleYawn = true;
+    // The yawn is followed by a blink; make sure its atlas is decoded so that
+    // transition doesn't hitch the first time the light is turned off.
+    spriteController.prefetchClip(currentCharacter.idleBlink);
+    requestIdleStart(
+      source: 'CharacterManager.handleLightToggled',
+      forceRestart: true,
     );
   }
 
@@ -452,13 +499,50 @@ class CharacterManager extends ChangeNotifier {
     setState(CharacterLifecycleState.animationAllowed);
   }
 
+  /// The idle a room opens with: yawn at night (if available), else blink at
+  /// night, else sway by day.
+  _IdleAnimationKind _roomEntryIdleKind() {
+    if (_nightMood) {
+      return currentCharacter.idleYawn != null
+          ? _IdleAnimationKind.yawn
+          : _IdleAnimationKind.blink;
+    }
+    return _IdleAnimationKind.sway;
+  }
+
+  SequenceClip _idleClipForKind(_IdleAnimationKind kind) {
+    switch (kind) {
+      case _IdleAnimationKind.blink:
+        return currentCharacter.idleBlink;
+      case _IdleAnimationKind.sway:
+        return currentCharacter.idleSway;
+      case _IdleAnimationKind.yawn:
+        return currentCharacter.idleYawn ?? currentCharacter.idleBlink;
+    }
+  }
+
   SequenceClip _takeNextIdleClip() {
     if (_isRoomJustEntered) {
       _isRoomJustEntered = false;
       _logIdle('IDLE_ROOM_ENTRY_GATE_CONSUMED room=${_selectedRoom.name}');
       _forceNextIdleBlink = false;
-      _lastIdleKind = _IdleAnimationKind.blink;
-      return currentCharacter.idleBlink;
+      _forceNextIdleYawn = false;
+      // Room entry opens with a "special" idle: yawn at night (if the character
+      // has one), sway by day. The next idle is then forced to blink (special
+      // never twice in a row), after which the normal 80/20 deck resumes.
+      final entryKind = _roomEntryIdleKind();
+      _lastIdleKind = entryKind;
+      return _idleClipForKind(entryKind);
+    }
+
+    final yawn = currentCharacter.idleYawn;
+
+    if (_forceNextIdleYawn) {
+      _forceNextIdleYawn = false;
+      if (yawn != null) {
+        _lastIdleKind = _IdleAnimationKind.yawn;
+        return yawn;
+      }
     }
 
     if (_forceNextIdleBlink) {
@@ -467,12 +551,24 @@ class CharacterManager extends ChangeNotifier {
       return currentCharacter.idleBlink;
     }
 
-    if (_lastIdleKind == _IdleAnimationKind.sway) {
+    // Never play a "special" idle (sway/yawn) twice in a row.
+    if (_lastIdleKind == _IdleAnimationKind.sway ||
+        _lastIdleKind == _IdleAnimationKind.yawn) {
       _lastIdleKind = _IdleAnimationKind.blink;
       return currentCharacter.idleBlink;
     }
 
-    if (_random.nextInt(_swayChanceDenominator) == 0) {
+    // At night the special idle is the yawn; by day it's the sway.
+    if (_nightMood && yawn != null) {
+      if (_random.nextInt(_specialIdleChanceDenominator) == 0) {
+        _lastIdleKind = _IdleAnimationKind.yawn;
+        return yawn;
+      }
+      _lastIdleKind = _IdleAnimationKind.blink;
+      return currentCharacter.idleBlink;
+    }
+
+    if (_random.nextInt(_specialIdleChanceDenominator) == 0) {
       _lastIdleKind = _IdleAnimationKind.sway;
       return currentCharacter.idleSway;
     }
@@ -484,6 +580,7 @@ class CharacterManager extends ChangeNotifier {
   void _resetIdleDeckForRoomEntry() {
     _lastIdleKind = null;
     _forceNextIdleBlink = true;
+    _forceNextIdleYawn = false;
   }
 
   void _playIdleSequence(
@@ -518,4 +615,4 @@ class CharacterManager extends ChangeNotifier {
   }
 }
 
-enum _IdleAnimationKind { blink, sway }
+enum _IdleAnimationKind { blink, sway, yawn }

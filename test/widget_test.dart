@@ -54,6 +54,12 @@ class _FakeAssetLoader extends AssetLoader {
   ) async {}
 
   @override
+  Future<void> preloadCharacterIdles(
+    CharacterDefinition character,
+    BuildContext context,
+  ) async {}
+
+  @override
   Future<void> prepareCharacterPlayback(CharacterDefinition character) async {}
 
   @override
@@ -108,9 +114,18 @@ Future<void> pumpUntilClipLoaded(
   WidgetTester tester,
   Finder playerFinder, {
   required String description,
+  required RoomId room,
 }) async {
   for (var index = 0; index < 80; index += 1) {
     await tester.pump(const Duration(milliseconds: 100));
+    // The drawer navigation switches rooms after a short menu-close delay, and
+    // the initial room already shows a character. Wait for the target room to
+    // actually be active before accepting its clip, so we don't lock onto the
+    // previous room's player mid-transition.
+    final mainRoom = tester.widget<MainRoomScreen>(find.byType(MainRoomScreen));
+    if (mainRoom.roomManager.currentRoom != room) {
+      continue;
+    }
     if (playerFinder.evaluate().isEmpty) {
       continue;
     }
@@ -484,32 +499,29 @@ void main() {
     manager.dispose();
   });
 
-  test('room entry always starts idle on blink after prior sway', () {
+  test('room entry opens on sway by day and yawn at night', () {
     final manager = CharacterManager(
       soundManager: SoundManager(),
       random: Random(1234),
     );
 
-    manager.syncRoom(RoomId.wardrobe);
-
-    var sawSway = false;
-    for (var index = 0; index < 20; index += 1) {
-      if (manager.debugTakeNextIdleClip().name == 'idle_sway') {
-        sawSway = true;
-        break;
-      }
-    }
-
-    expect(sawSway, isTrue);
-
+    // Day: the room opens on sway, then the next idle is forced to blink
+    // (a "special" idle never plays twice in a row).
     manager.syncRoom(RoomId.rocket);
+    manager.syncNightMood(isNight: false);
+    expect(manager.debugTakeNextIdleClip().name, 'idle_sway');
+    expect(manager.debugTakeNextIdleClip().name, 'idle_blink');
 
+    // Night: the room opens on yawn (rocket Dudak has a yawn clip).
+    manager.syncRoom(RoomId.rocket);
+    manager.syncNightMood(isNight: true);
+    expect(manager.debugTakeNextIdleClip().name, 'idle_yawn');
     expect(manager.debugTakeNextIdleClip().name, 'idle_blink');
 
     manager.dispose();
   });
 
-  test('room entry gate forces executed idle to blink', () {
+  test('room entry gate opens executed idle on sway by day', () {
     final manager = CharacterManager(
       soundManager: SoundManager(),
       random: Random(1234),
@@ -536,7 +548,7 @@ void main() {
       allowWhileInitializing: true,
     );
 
-    expect(manager.sequenceController.clip?.name, 'idle_blink');
+    expect(manager.sequenceController.clip?.name, 'idle_sway');
 
     manager.dispose();
   });
@@ -616,6 +628,7 @@ void main() {
       tester,
       find.byType(SpriteSequencePlayer),
       description: 'Rocket sprite player',
+      room: RoomId.rocket,
     );
 
     final player = tester.widget<SpriteSequencePlayer>(
@@ -625,9 +638,12 @@ void main() {
     expect(player.controller.clip!.name, contains('idle_'));
   });
 
-  testWidgets('switching from rocket to bedroom clears stale rocket frame', (
-    WidgetTester tester,
-  ) async {
+  // All rooms now have characters, so there is no "character-less" room to
+  // navigate to. This test's premise no longer applies — it tested that stale
+  // SpriteSequencePlayer frames don't linger when entering a room without a
+  // character. Re-enable if a room without a character is added back.
+  testWidgets('switching from rocket to a character-less room clears stale '
+      'rocket frame', skip: true, (WidgetTester tester) async {
     await tester.pumpWidget(_testApp());
     await pumpUntilMainRoom(tester);
 
@@ -641,16 +657,20 @@ void main() {
       tester,
       find.byType(SpriteSequencePlayer),
       description: 'Rocket sprite player',
+      room: RoomId.rocket,
     );
 
+    // Balloon has no character yet, so no SpriteSequencePlayer mounts there —
+    // a clean target to verify the rocket frame doesn't linger after leaving.
     tester
         .widget<RoomNavigationBar>(find.byType(RoomNavigationBar))
-        .onRoomSelected(RoomId.bedroom);
-    await pumpUntilFound(
+        .onRoomSelected(RoomId.baloon);
+    await pumpUntilRoomSelected(
       tester,
-      find.byKey(const ValueKey<String>('bedroom-lamp-target')),
-      description: 'Bedroom lamp target',
+      RoomId.baloon,
+      description: 'Balloon room',
     );
+    await tester.pumpAndSettle();
 
     final assetNames = tester
         .widgetList<Image>(find.byType(Image))
@@ -680,6 +700,7 @@ void main() {
       tester,
       find.byType(SpriteSequencePlayer),
       description: 'Rocket sprite player',
+      room: RoomId.rocket,
     );
 
     final navigationBar = tester.widget<RoomNavigationBar>(
@@ -740,6 +761,7 @@ void main() {
         tester,
         find.byType(SpriteSequencePlayer),
         description: 'Wardrobe sprite player',
+        room: RoomId.wardrobe,
       );
 
       for (var index = 0; index < 8; index += 1) {
@@ -779,6 +801,7 @@ void main() {
       tester,
       find.byType(SpriteSequencePlayer),
       description: 'Table sprite player',
+      room: RoomId.baloon,
     );
 
     final player = tester.widget<SpriteSequencePlayer>(
@@ -804,6 +827,7 @@ void main() {
       tester,
       find.byType(SpriteSequencePlayer),
       description: 'Rocket sprite player',
+      room: RoomId.rocket,
     );
 
     final playerFinder = find.byType(SpriteSequencePlayer);
@@ -834,6 +858,7 @@ void main() {
       tester,
       find.byType(SpriteSequencePlayer),
       description: 'Rocket sprite player',
+      room: RoomId.rocket,
     );
 
     final playerFinder = find.byType(SpriteSequencePlayer);

@@ -67,6 +67,7 @@ flutter:
     - assets/characters/babak/bedroom/
     - assets/characters/babak/bedroom/idle_blink/
     - assets/characters/babak/bedroom/idle_sway/
+    - assets/characters/babak/bedroom/idle_yawn/
     - assets/characters/babak/bedroom/reaction_head/
     - assets/characters/babak/bedroom/reaction_belly/
     - assets/characters/babak/bedroom/reaction_legs/

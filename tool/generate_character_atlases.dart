@@ -18,10 +18,16 @@ void main(List<String> args) {
     return;
   }
 
+  final scale = _parseScaleArg(args);
+  final matchFrames = _parseMatchFramesArg(args);
+  final rawTargets = args
+      .where((arg) => !arg.startsWith('--'))
+      .toList(growable: false);
+
   final animationDirs = _collectTargetAnimationDirs(
     repoRoot: repoRoot,
     charactersRoot: charactersRoot,
-    rawTargets: args,
+    rawTargets: rawTargets,
   );
 
   if (animationDirs.isEmpty) {
@@ -36,7 +42,11 @@ void main(List<String> args) {
 
   var generatedCount = 0;
   for (final animationDir in animationDirs) {
-    final generated = _generateAtlasForDirectory(animationDir);
+    final generated = _generateAtlasForDirectory(
+      animationDir,
+      scale: scale,
+      matchFrames: matchFrames,
+    );
     if (generated) {
       generatedCount += 1;
     }
@@ -133,13 +143,50 @@ Directory? _animationDirectoryForEntity(FileSystemEntity entity) {
   return _isAnimationDirectory(parent.path) ? parent : null;
 }
 
+/// Parses an optional `--scale=<0..1>` argument. Returns 1.0 (no scaling) when
+/// absent or invalid. Used to shrink the source frames before packing so the
+/// resulting atlas holds fewer pixels (lower texture RAM).
+double _parseScaleArg(List<String> args) {
+  for (final arg in args) {
+    if (arg.startsWith('--scale=')) {
+      final value = double.tryParse(arg.substring('--scale='.length));
+      if (value != null && value > 0 && value <= 1.0) {
+        return value;
+      }
+    }
+  }
+  return 1.0;
+}
+
+/// Parses an optional `--match-frames=14,15,16` argument: 1-indexed frame
+/// numbers whose colour should be matched to the clip's last frame (which is
+/// authored to match the blink/rest colour). Fixes AI-render colour drift on a
+/// few frames without touching the others.
+Set<int> _parseMatchFramesArg(List<String> args) {
+  for (final arg in args) {
+    if (arg.startsWith('--match-frames=')) {
+      return arg
+          .substring('--match-frames='.length)
+          .split(',')
+          .map((token) => int.tryParse(token.trim()))
+          .whereType<int>()
+          .toSet();
+    }
+  }
+  return const <int>{};
+}
+
 String _normalizeRelativePath(String rawPath) {
   return rawPath
       .replaceAll('/', Platform.pathSeparator)
       .replaceAll('\\', Platform.pathSeparator);
 }
 
-bool _generateAtlasForDirectory(Directory animationDir) {
+bool _generateAtlasForDirectory(
+  Directory animationDir, {
+  double scale = 1.0,
+  Set<int> matchFrames = const <int>{},
+}) {
   final frames =
       animationDir
           .listSync(followLinks: false)
@@ -167,14 +214,47 @@ bool _generateAtlasForDirectory(Directory animationDir) {
       return false;
     }
 
+    var sanitized = _sanitizeTransparentPixels(image);
+    if (scale != 1.0) {
+      sanitized = img.copyResize(
+        sanitized,
+        width: math.max(1, (sanitized.width * scale).round()),
+        height: math.max(1, (sanitized.height * scale).round()),
+        interpolation: img.Interpolation.average,
+      );
+    }
+
     decodedFrames.add(
-      _DecodedFrame(
-        path: frameFile.path,
-        image: _sanitizeTransparentPixels(image),
-      ),
+      _DecodedFrame(path: frameFile.path, image: sanitized),
     );
-    maxFrameWidth = math.max(maxFrameWidth, image.width);
-    maxFrameHeight = math.max(maxFrameHeight, image.height);
+    maxFrameWidth = math.max(maxFrameWidth, sanitized.width);
+    maxFrameHeight = math.max(maxFrameHeight, sanitized.height);
+  }
+
+
+  // Colour-match the requested frames to the clip's last frame (authored to the
+  // blink/rest colour), fixing per-frame render colour drift.
+  if (matchFrames.isNotEmpty && decodedFrames.length > 1) {
+    final reference = _meanBodyColor(decodedFrames.last.image);
+    if (reference[0] > 0 && reference[1] > 0 && reference[2] > 0) {
+      for (final frameNumber in matchFrames) {
+        final index = frameNumber - 1;
+        if (index < 0 || index >= decodedFrames.length) {
+          continue;
+        }
+        final image = decodedFrames[index].image;
+        final mean = _meanBodyColor(image);
+        if (mean[0] == 0 || mean[1] == 0 || mean[2] == 0) {
+          continue;
+        }
+        _applyChannelGainInPlace(
+          image,
+          reference[0] / mean[0],
+          reference[1] / mean[1],
+          reference[2] / mean[2],
+        );
+      }
+    }
   }
 
   final columns = math.max(1, math.sqrt(decodedFrames.length).ceil());
@@ -240,9 +320,13 @@ bool _generateAtlasForDirectory(Directory animationDir) {
 
   atlasImageFile.writeAsBytesSync(img.encodePng(atlas, level: 6));
   atlasMetadataFile.writeAsStringSync(
-    const JsonEncoder.withIndent(
-      '  ',
-    ).convert(<String, Object>{'frames': metadataFrames}),
+    const JsonEncoder.withIndent('  ').convert(<String, Object>{
+      'frames': metadataFrames,
+      // Frames are rendered as-authored (BoxFit.contain, bottomCenter); the art's
+      // own padding defines where the character sits. Kept at 0 so every clip /
+      // character lands at the same position — no grounding shift.
+      'bottomInset': 0.0,
+    }),
   );
 
   stdout.writeln('Generated ${atlasImageFile.path}');
@@ -259,6 +343,51 @@ bool _generateAtlasForDirectory(Directory animationDir) {
   }
   return true;
 }
+
+/// Mean RGB of the opaque body pixels (alpha > 200), as [r, g, b] doubles.
+List<double> _meanBodyColor(img.Image image) {
+  var r = 0.0;
+  var g = 0.0;
+  var b = 0.0;
+  var count = 0;
+  for (var y = 0; y < image.height; y += 2) {
+    for (var x = 0; x < image.width; x += 2) {
+      final pixel = image.getPixel(x, y);
+      if (pixel.a > 200) {
+        r += pixel.r;
+        g += pixel.g;
+        b += pixel.b;
+        count += 1;
+      }
+    }
+  }
+  if (count == 0) {
+    return <double>[0, 0, 0];
+  }
+  return <double>[r / count, g / count, b / count];
+}
+
+/// Multiplies each pixel's RGB by the per-channel gains (alpha untouched),
+/// clamped to 0..255. Mutates [image] in place.
+void _applyChannelGainInPlace(img.Image image, double gr, double gg, double gb) {
+  for (var y = 0; y < image.height; y += 1) {
+    for (var x = 0; x < image.width; x += 1) {
+      final pixel = image.getPixel(x, y);
+      image.setPixelRgba(
+        x,
+        y,
+        (pixel.r * gr).clamp(0, 255).round(),
+        (pixel.g * gg).clamp(0, 255).round(),
+        (pixel.b * gb).clamp(0, 255).round(),
+        pixel.a,
+      );
+    }
+  }
+}
+
+/// Smallest number of fully-transparent rows at the bottom across all frames.
+/// Cropping by this seats the feet at the frame bottom without clipping any
+/// frame's content.
 
 List<_FrameValidationIssue> _validatePackedFrames({
   required img.Image atlas,
@@ -544,6 +673,7 @@ bool _isAnimationDirectory(String directoryPath) {
   final normalizedPath = directoryPath.replaceAll('\\', '/');
   return normalizedPath.endsWith('/idle_blink') ||
       normalizedPath.endsWith('/idle_sway') ||
+      normalizedPath.endsWith('/idle_yawn') ||
       normalizedPath.endsWith('/reaction_head') ||
       normalizedPath.endsWith('/reaction_belly') ||
       normalizedPath.endsWith('/reaction_legs');

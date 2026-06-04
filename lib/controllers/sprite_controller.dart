@@ -73,6 +73,18 @@ class SpriteController extends ChangeNotifier {
     return firstTextureBound;
   }
 
+  /// Eagerly decodes [clip]'s atlas into the cache (discarding the frame) so it
+  /// is resident before playback switches to it — avoids a decode hitch the
+  /// first time a freshly entered room shows this clip (e.g. the blink that
+  /// follows the entry yawn/sway).
+  void prefetchClip(SequenceClip clip) {
+    final assetLoader = _assetLoader;
+    if (assetLoader == null || _isDisposed) {
+      return;
+    }
+    unawaited(assetLoader.loadTextureFrame(clip, 0));
+  }
+
   void warmupFirstTexture(SequenceClip seedClip) {
     if (hasFirstTextureBound || _isDisposed || _assetLoader == null) {
       return;
