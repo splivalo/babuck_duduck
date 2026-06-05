@@ -405,15 +405,22 @@ List<RoomConfig> get roomNavigationItems => roomNavigationOrder
 bool roomHasReadyCharacterAssets(RoomId roomId) =>
     roomsWithReadyCharacterAssets.contains(roomId);
 
-String _characterRoomAssetRoot(RoomId roomId, CharacterId characterId) {
+String _characterRoomAssetRoot(
+  RoomId roomId,
+  CharacterId characterId,
+  CharacterAnimationId animationId,
+) {
   switch ((roomId, characterId)) {
     case (RoomId.bedroom, CharacterId.babak):
       return 'assets/characters/babak/bedroom';
     case (RoomId.wardrobe, CharacterId.dudak):
       return 'assets/characters/dudak/wardrobe';
     case (RoomId.baloon, CharacterId.babak):
-      // Baloon shares babak's bedroom atlases — no duplicate assets needed.
-      return 'assets/characters/babak/bedroom';
+      // Baloon shares only babak's bedroom blink atlas (identical there); its
+      // sway and all reactions are room-specific.
+      return animationId == CharacterAnimationId.idleBlink
+          ? 'assets/characters/babak/bedroom'
+          : 'assets/characters/babak/baloon';
     case (RoomId.rocket, CharacterId.dudak):
       return 'assets/characters/dudak/rocket';
     default:
@@ -597,8 +604,10 @@ _roomCharacterAnimationTunings = <String, RoomCharacterAnimationTuning>{
     frameCounts: const <CharacterAnimationId, int>{
       CharacterAnimationId.idleBlink: 7,
       CharacterAnimationId.idleSway: 17,
-      CharacterAnimationId.idleYawn: 26,
+      CharacterAnimationId.idleYawn: 28,
       CharacterAnimationId.reactionHead: 18,
+      CharacterAnimationId.reactionBelly: 14,
+      CharacterAnimationId.reactionLegs: 14,
     },
     frameTimings: <CharacterAnimationId, List<AnimationFrameTiming>>{
       CharacterAnimationId.idleBlink: _buildBlinkFrameTimings(
@@ -616,7 +625,7 @@ _roomCharacterAnimationTunings = <String, RoomCharacterAnimationTuning>{
         AnimationFrameTiming(frameIndex: 0, durationMs: 120),
         AnimationFrameTiming(frameIndex: 0, durationMs: 120),
         AnimationFrameTiming(frameIndex: 0, durationMs: 120),
-        for (var i = 1; i < 26; i++)
+        for (var i = 1; i < 28; i++)
           AnimationFrameTiming(frameIndex: i, durationMs: 80),
       ],
       CharacterAnimationId.reactionHead: <AnimationFrameTiming>[
@@ -629,6 +638,8 @@ _roomCharacterAnimationTunings = <String, RoomCharacterAnimationTuning>{
       CharacterAnimationId.idleSway: AnimationMigrationStatus.migrated,
       CharacterAnimationId.idleYawn: AnimationMigrationStatus.migrated,
       CharacterAnimationId.reactionHead: AnimationMigrationStatus.migrated,
+      CharacterAnimationId.reactionBelly: AnimationMigrationStatus.migrated,
+      CharacterAnimationId.reactionLegs: AnimationMigrationStatus.migrated,
     },
     animationEvents: const <CharacterAnimationId, List<AnimationTimelineEvent>>{
       CharacterAnimationId.idleYawn: <AnimationTimelineEvent>[
@@ -646,7 +657,10 @@ _roomCharacterAnimationTunings = <String, RoomCharacterAnimationTuning>{
   ): RoomCharacterAnimationTuning(
     frameCounts: const <CharacterAnimationId, int>{
       CharacterAnimationId.idleBlink: 7,
-      CharacterAnimationId.idleSway: 17,
+      CharacterAnimationId.idleSway: 13,
+      CharacterAnimationId.reactionHead: 23,
+      CharacterAnimationId.reactionBelly: 21,
+      CharacterAnimationId.reactionLegs: 18,
     },
     frameTimings: <CharacterAnimationId, List<AnimationFrameTiming>>{
       CharacterAnimationId.idleBlink: _buildBlinkFrameTimings(
@@ -662,6 +676,9 @@ _roomCharacterAnimationTunings = <String, RoomCharacterAnimationTuning>{
     migrationStatuses: const <CharacterAnimationId, AnimationMigrationStatus>{
       CharacterAnimationId.idleBlink: AnimationMigrationStatus.migrated,
       CharacterAnimationId.idleSway: AnimationMigrationStatus.migrated,
+      CharacterAnimationId.reactionHead: AnimationMigrationStatus.migrated,
+      CharacterAnimationId.reactionBelly: AnimationMigrationStatus.migrated,
+      CharacterAnimationId.reactionLegs: AnimationMigrationStatus.migrated,
     },
   ),
   _roomCharacterTuningKey(
@@ -973,7 +990,7 @@ CharacterAnimationConfig _buildCharacterAnimationConfig(
   CharacterId characterId,
   CharacterAnimationId animationId,
 ) {
-  final assetRoot = _characterRoomAssetRoot(roomId, characterId);
+  final assetRoot = _characterRoomAssetRoot(roomId, characterId, animationId);
   final animationDirectory = _animationDirectoryName(animationId);
   final directoryPath = '$assetRoot/$animationDirectory';
 
