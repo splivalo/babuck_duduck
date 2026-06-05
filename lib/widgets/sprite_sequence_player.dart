@@ -21,8 +21,6 @@ class SpriteSequencePlayer extends StatefulWidget {
 }
 
 class _SpriteSequencePlayerState extends State<SpriteSequencePlayer> {
-  int _rebuildCount = 0;
-  bool _everHadTexture = false;
   bool _hasFirstTextureFrame = false;
 
   @override
@@ -39,16 +37,12 @@ class _SpriteSequencePlayerState extends State<SpriteSequencePlayer> {
     return AnimatedBuilder(
       animation: widget.controller,
       builder: (context, _) {
-        _rebuildCount += 1;
         final clip = widget.controller.clip;
-        final textureFrame = widget.controller.textureFrame;
         final displayTextureFrame = widget.controller.displayTextureFrame;
         final hasDisplayTextureFrame = displayTextureFrame != null;
 
-        final hadTexture = _everHadTexture;
         final hadFirstTextureFrame = _hasFirstTextureFrame;
         if (hasDisplayTextureFrame) {
-          _everHadTexture = true;
           if (!_hasFirstTextureFrame) {
             _hasFirstTextureFrame = true;
             renderLog(
@@ -57,18 +51,6 @@ class _SpriteSequencePlayerState extends State<SpriteSequencePlayer> {
             );
           }
         }
-
-        renderLog(
-          'SpriteSequencePlayer',
-          'BUILD #$_rebuildCount '
-              'clip=${clip?.name ?? 'null'} '
-              'frame=${widget.controller.frameIndex} '
-              'textureFrame=${textureFrame == null ? 'null' : 'non-null'} '
-              'displayTextureFrame=${displayTextureFrame == null ? 'null→BLANK' : 'non-null→VISIBLE'} '
-              'hasFirstTextureFrame=$_hasFirstTextureFrame '
-              'everHadTexture=$hadTexture '
-              '${displayTextureFrame == null && hadTexture ? '⚠ DISAPPEAR' : ''}',
-        );
 
         final child = displayTextureFrame == null
             ? const SizedBox.shrink()
@@ -93,74 +75,6 @@ class _SpriteSequencePlayerState extends State<SpriteSequencePlayer> {
         return Stack(fit: StackFit.expand, children: <Widget>[gatedChild]);
       },
     );
-  }
-}
-
-// ignore: unused_element
-class _SpriteDebugOverlay extends StatelessWidget {
-  const _SpriteDebugOverlay({
-    required this.characterLabel,
-    required this.clipName,
-    required this.frameIndex,
-    required this.frameCount,
-    required this.textureFrame,
-    required this.isLoading,
-  });
-
-  final String characterLabel;
-  final String clipName;
-  final int frameIndex;
-  final int frameCount;
-  final TextureFrame? textureFrame;
-  final bool isLoading;
-
-  @override
-  Widget build(BuildContext context) {
-    final backend = switch (textureFrame) {
-      TextureFrame frame when frame.assetPath != null => 'png',
-      TextureFrame _ => 'atlas',
-      null => 'none',
-    };
-    final textureValue = textureFrame?.assetPath ?? _rectLabel(textureFrame);
-
-    return IgnorePointer(
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.68),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          child: DefaultTextStyle(
-            style: Theme.of(context).textTheme.bodySmall!.copyWith(
-              color: Colors.white,
-              fontSize: 11,
-              height: 1.25,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text('character: $characterLabel'),
-                Text('clip: $clipName'),
-                Text('backend: $backend${isLoading ? ' (loading)' : ''}'),
-                Text('frame: ${frameIndex + 1}/$frameCount'),
-                Text('texture: $textureValue'),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  String _rectLabel(TextureFrame? frame) {
-    final rect = frame?.sourceRect;
-    if (rect == null) {
-      return 'unresolved';
-    }
-
-    return 'rect(${rect.left.toStringAsFixed(0)},${rect.top.toStringAsFixed(0)},${rect.width.toStringAsFixed(0)},${rect.height.toStringAsFixed(0)})';
   }
 }
 
@@ -237,10 +151,15 @@ Widget _spriteContent(TextureFrame textureFrame) {
   );
 }
 
-class _PngContactShadow extends StatelessWidget {
-  const _PngContactShadow({required this.assetPath});
+/// Shared transform/blur/tint stack that turns any [child] into an on-floor
+/// contact shadow: skewed, squashed, blurred and darkened, anchored to the
+/// bottom-center of the stage. The two callers differ only in the leaf they
+/// supply — a standalone PNG ([_PngContactShadow]) or an atlas frame painter
+/// ([_SpriteSheetContactShadow]).
+class _ContactShadow extends StatelessWidget {
+  const _ContactShadow({required this.child});
 
-  final String assetPath;
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
@@ -252,7 +171,7 @@ class _PngContactShadow extends StatelessWidget {
             final stageHeight = constraints.maxHeight;
             // Lift the shadow up toward the feet. Increase this fraction to move
             // the contact shadow higher (closer to the soles), decrease to drop
-            // it. Shared by all atlas characters.
+            // it. Shared by all characters.
             final verticalOffset = -(stageHeight * 0.045);
             final blurSigma = (stageHeight * 0.0115).clamp(3.5, 6.5);
 
@@ -275,13 +194,7 @@ class _PngContactShadow extends StatelessWidget {
                         Colors.black.withValues(alpha: 0.16),
                         BlendMode.srcIn,
                       ),
-                      child: Image.asset(
-                        assetPath,
-                        fit: BoxFit.contain,
-                        alignment: Alignment.bottomCenter,
-                        gaplessPlayback: true,
-                        filterQuality: FilterQuality.low,
-                      ),
+                      child: child,
                     ),
                   ),
                 ),
@@ -289,6 +202,25 @@ class _PngContactShadow extends StatelessWidget {
             );
           },
         ),
+      ),
+    );
+  }
+}
+
+class _PngContactShadow extends StatelessWidget {
+  const _PngContactShadow({required this.assetPath});
+
+  final String assetPath;
+
+  @override
+  Widget build(BuildContext context) {
+    return _ContactShadow(
+      child: Image.asset(
+        assetPath,
+        fit: BoxFit.contain,
+        alignment: Alignment.bottomCenter,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.low,
       ),
     );
   }
@@ -315,56 +247,16 @@ class _SpriteSheetContactShadow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.bottomCenter,
-      child: IgnorePointer(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final stageHeight = constraints.maxHeight;
-            // Lift the shadow up toward the feet. Increase this fraction to move
-            // the contact shadow higher (closer to the soles), decrease to drop
-            // it. Shared by all atlas characters.
-            final verticalOffset = -(stageHeight * 0.045);
-            final blurSigma = (stageHeight * 0.0115).clamp(3.5, 6.5);
-
-            return Transform.translate(
-              offset: Offset(0, verticalOffset),
-              child: Transform(
-                alignment: Alignment.bottomCenter,
-                transform: Matrix4.skewX(-0.5),
-                child: Transform.scale(
-                  scaleX: 1.06,
-                  scaleY: 0.26,
-                  alignment: Alignment.bottomCenter,
-                  child: ImageFiltered(
-                    imageFilter: ui.ImageFilter.blur(
-                      sigmaX: blurSigma,
-                      sigmaY: blurSigma,
-                    ),
-                    child: ColorFiltered(
-                      colorFilter: ColorFilter.mode(
-                        Colors.black.withValues(alpha: 0.16),
-                        BlendMode.srcIn,
-                      ),
-                      child: SizedBox(
-                        width: constraints.maxWidth,
-                        height: constraints.maxHeight,
-                        child: CustomPaint(
-                          painter: _SpriteSheetFramePainter(
-                            image: image,
-                            sourceRect: sourceRect,
-                            frameWidth: frameWidth,
-                            frameHeight: frameHeight,
-                            bottomInset: bottomInset,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
+    return _ContactShadow(
+      child: SizedBox.expand(
+        child: CustomPaint(
+          painter: _SpriteSheetFramePainter(
+            image: image,
+            sourceRect: sourceRect,
+            frameWidth: frameWidth,
+            frameHeight: frameHeight,
+            bottomInset: bottomInset,
+          ),
         ),
       ),
     );

@@ -39,31 +39,7 @@ class _FakeAssetLoader extends AssetLoader {
   ) async {}
 
   @override
-  Future<void> preloadRoomScene({
-    required BuildContext context,
-    required String currentBackgroundAsset,
-    String? nextBackgroundAsset,
-    String? previousBackgroundAsset,
-    Iterable<String> extraBackgroundAssets = const <String>[],
-  }) async {}
-
-  @override
-  Future<void> preloadCharacter(
-    CharacterDefinition character,
-    BuildContext context,
-  ) async {}
-
-  @override
   Future<void> preloadCharacterIdles(
-    CharacterDefinition character,
-    BuildContext context,
-  ) async {}
-
-  @override
-  Future<void> prepareCharacterPlayback(CharacterDefinition character) async {}
-
-  @override
-  Future<void> preloadCharacterScene(
     CharacterDefinition character,
     BuildContext context,
   ) async {}

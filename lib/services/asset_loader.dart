@@ -65,15 +65,12 @@ class _SpriteSheetAsset {
 
 class AssetLoader {
   static const int _maxActiveSpriteSheets = 7;
-  static const int _maxSceneBackgrounds = 3;
   static const int _maxPngSequenceProbeFrames = 240;
 
   final LinkedHashMap<String, _SpriteSheetAsset> _spriteSheetCache =
       LinkedHashMap<String, _SpriteSheetAsset>();
   final Map<String, Future<_SpriteSheetAsset?>> _pendingSpriteSheetLoads =
       <String, Future<_SpriteSheetAsset?>>{};
-  final LinkedHashMap<String, AssetImage> _sceneBackgroundCache =
-      LinkedHashMap<String, AssetImage>();
   Future<Set<String>>? _assetManifestFuture;
   final Map<String, int> _pngSequenceFrameCountCache = <String, int>{};
   final Map<String, List<String>> _pngSequenceFramePathsCache =
@@ -94,46 +91,6 @@ class AssetLoader {
     try {
       await _precacheAsset(AssetImage(assetPath), configuration);
     } catch (_) {}
-  }
-
-  Future<void> preloadRoomScene({
-    required BuildContext context,
-    required String currentBackgroundAsset,
-    String? nextBackgroundAsset,
-    String? previousBackgroundAsset,
-    Iterable<String> extraBackgroundAssets = const <String>[],
-  }) async {
-    final desiredAssets = <String>{
-      currentBackgroundAsset,
-      ?nextBackgroundAsset,
-      ?previousBackgroundAsset,
-      ...extraBackgroundAssets,
-    };
-
-    for (final assetPath in desiredAssets) {
-      await preloadRoomBackground(context, assetPath);
-      _touchSceneBackground(assetPath);
-    }
-
-    await _evictUnusedSceneBackgrounds(desiredAssets);
-  }
-
-  Future<void> preloadCharacter(
-    CharacterDefinition character,
-    BuildContext context,
-  ) async {
-    final configuration = createLocalImageConfiguration(context);
-
-    for (final clip in character.preloadClips) {
-      await _prepareClip(clip);
-      await _preloadClip(clip, configuration);
-    }
-  }
-
-  Future<void> prepareCharacterPlayback(CharacterDefinition character) async {
-    for (final clip in character.preloadClips) {
-      await _prepareClip(clip);
-    }
   }
 
   /// Lightweight startup warm: decodes and caches only the idle atlases
@@ -186,18 +143,6 @@ class AssetLoader {
       final evicted = _spriteSheetCache.remove(key);
       evicted?.image.dispose();
     }
-  }
-
-  Future<void> preloadCharacterScene(
-    CharacterDefinition character,
-    BuildContext context,
-  ) async {
-    final configuration = createLocalImageConfiguration(context);
-    for (final clip in character.preloadClips) {
-      await _prepareClip(clip);
-    }
-    await _preloadClip(character.idleBlink, configuration);
-    await _preloadClip(character.idleSway, configuration);
   }
 
   Future<void> _prepareClip(SequenceClip clip) async {
@@ -531,32 +476,6 @@ class AssetLoader {
     }
   }
 
-  void _touchSceneBackground(String assetPath) {
-    final existing = _sceneBackgroundCache.remove(assetPath);
-    _sceneBackgroundCache[assetPath] = existing ?? AssetImage(assetPath);
-  }
-
-  Future<void> _evictUnusedSceneBackgrounds(Set<String> desiredAssets) async {
-    final staleAssets = _sceneBackgroundCache.keys
-        .where((assetPath) => !desiredAssets.contains(assetPath))
-        .toList(growable: false);
-
-    for (final assetPath in staleAssets) {
-      final provider = _sceneBackgroundCache.remove(assetPath);
-      if (provider != null) {
-        await provider.evict();
-      }
-    }
-
-    while (_sceneBackgroundCache.length > _maxSceneBackgrounds) {
-      final oldestKey = _sceneBackgroundCache.keys.first;
-      final provider = _sceneBackgroundCache.remove(oldestKey);
-      if (provider != null) {
-        await provider.evict();
-      }
-    }
-  }
-
   String _spriteSheetCacheKey(SpriteSheetFrameSource frameSource) =>
       '${frameSource.imageAssetPath}|${frameSource.metadataAssetPath}';
 
@@ -726,10 +645,6 @@ class AssetLoader {
   }
 
   void dispose() {
-    for (final provider in _sceneBackgroundCache.values) {
-      unawaited(provider.evict());
-    }
-    _sceneBackgroundCache.clear();
     for (final spriteSheet in _spriteSheetCache.values) {
       spriteSheet.image.dispose();
     }

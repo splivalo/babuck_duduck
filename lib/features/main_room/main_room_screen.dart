@@ -235,7 +235,6 @@ class _MainRoomScreenState extends State<MainRoomScreen> {
                     alignment: Alignment.topRight,
                     child: RoomNavigationBar(
                       currentRoom: currentRoom,
-                      onRoomSelectionRequested: (_) {},
                       onRoomSelected: _handleRoomSelected,
                     ),
                   ),

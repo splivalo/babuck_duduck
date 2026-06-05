@@ -10,12 +10,10 @@ class RoomNavigationBar extends StatefulWidget {
   const RoomNavigationBar({
     super.key,
     required this.currentRoom,
-    required this.onRoomSelectionRequested,
     required this.onRoomSelected,
   });
 
   final RoomId currentRoom;
-  final ValueChanged<RoomId> onRoomSelectionRequested;
   final ValueChanged<RoomId> onRoomSelected;
 
   @override
@@ -42,8 +40,6 @@ class _RoomNavigationBarState extends State<RoomNavigationBar> {
     if (_selectionCommitPending) {
       return;
     }
-
-    widget.onRoomSelectionRequested(room);
 
     if (!_isOpen) {
       widget.onRoomSelected(room);

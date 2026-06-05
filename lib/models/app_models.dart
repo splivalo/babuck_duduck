@@ -607,7 +607,7 @@ _roomCharacterAnimationTunings = <String, RoomCharacterAnimationTuning>{
       CharacterAnimationId.idleYawn: 28,
       CharacterAnimationId.reactionHead: 18,
       CharacterAnimationId.reactionBelly: 14,
-      CharacterAnimationId.reactionLegs: 14,
+      CharacterAnimationId.reactionLegs: 18,
     },
     frameTimings: <CharacterAnimationId, List<AnimationFrameTiming>>{
       CharacterAnimationId.idleBlink: _buildBlinkFrameTimings(
@@ -1077,14 +1077,6 @@ CharacterAnimationConfig animationConfigFor(
       characterId,
       animationId,
     )]!;
-
-List<CharacterAnimationConfig> animationConfigsWithStatus(
-  AnimationMigrationStatus status,
-) {
-  return characterAnimationConfigs
-      .where((config) => config.migrationStatus == status)
-      .toList(growable: false);
-}
 
 Map<String, ReactionSoundConfig> buildReactionSoundConfig() {
   final config = <String, ReactionSoundConfig>{};

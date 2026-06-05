@@ -56,133 +56,50 @@ class CharacterManager extends ChangeNotifier {
 
   static final Map<RoomId, CharacterDefinition> _definitions =
       <RoomId, CharacterDefinition>{
-        RoomId.bedroom: CharacterDefinition(
-          id: CharacterId.babak,
-          label: 'Babak',
-          idleBlink: animationConfigFor(
-            RoomId.bedroom,
-            CharacterId.babak,
-            CharacterAnimationId.idleBlink,
-          ).toSequenceClip(),
-          idleSway: animationConfigFor(
-            RoomId.bedroom,
-            CharacterId.babak,
-            CharacterAnimationId.idleSway,
-          ).toSequenceClip(),
-          idleYawn: animationConfigFor(
-            RoomId.bedroom,
-            CharacterId.babak,
-            CharacterAnimationId.idleYawn,
-          ).toSequenceClip(),
-          reactionHead: animationConfigFor(
-            RoomId.bedroom,
-            CharacterId.babak,
-            CharacterAnimationId.reactionHead,
-          ).toSequenceClip(),
-          reactionBelly: animationConfigFor(
-            RoomId.bedroom,
-            CharacterId.babak,
-            CharacterAnimationId.reactionBelly,
-          ).toSequenceClip(),
-          reactionLegs: animationConfigFor(
-            RoomId.bedroom,
-            CharacterId.babak,
-            CharacterAnimationId.reactionLegs,
-          ).toSequenceClip(),
-        ),
-        RoomId.wardrobe: CharacterDefinition(
-          id: CharacterId.dudak,
-          label: 'Dudak',
-          idleBlink: animationConfigFor(
-            RoomId.wardrobe,
-            CharacterId.dudak,
-            CharacterAnimationId.idleBlink,
-          ).toSequenceClip(),
-          idleSway: animationConfigFor(
-            RoomId.wardrobe,
-            CharacterId.dudak,
-            CharacterAnimationId.idleSway,
-          ).toSequenceClip(),
-          reactionHead: animationConfigFor(
-            RoomId.wardrobe,
-            CharacterId.dudak,
-            CharacterAnimationId.reactionHead,
-          ).toSequenceClip(),
-          reactionBelly: animationConfigFor(
-            RoomId.wardrobe,
-            CharacterId.dudak,
-            CharacterAnimationId.reactionBelly,
-          ).toSequenceClip(),
-          reactionLegs: animationConfigFor(
-            RoomId.wardrobe,
-            CharacterId.dudak,
-            CharacterAnimationId.reactionLegs,
-          ).toSequenceClip(),
-        ),
-        RoomId.baloon: CharacterDefinition(
-          id: CharacterId.babak,
-          label: 'Babak',
-          idleBlink: animationConfigFor(
-            RoomId.baloon,
-            CharacterId.babak,
-            CharacterAnimationId.idleBlink,
-          ).toSequenceClip(),
-          idleSway: animationConfigFor(
-            RoomId.baloon,
-            CharacterId.babak,
-            CharacterAnimationId.idleSway,
-          ).toSequenceClip(),
-          reactionHead: animationConfigFor(
-            RoomId.baloon,
-            CharacterId.babak,
-            CharacterAnimationId.reactionHead,
-          ).toSequenceClip(),
-          reactionBelly: animationConfigFor(
-            RoomId.baloon,
-            CharacterId.babak,
-            CharacterAnimationId.reactionBelly,
-          ).toSequenceClip(),
-          reactionLegs: animationConfigFor(
-            RoomId.baloon,
-            CharacterId.babak,
-            CharacterAnimationId.reactionLegs,
-          ).toSequenceClip(),
-        ),
-        RoomId.rocket: CharacterDefinition(
-          id: CharacterId.dudak,
-          label: 'Dudak',
-          idleBlink: animationConfigFor(
-            RoomId.rocket,
-            CharacterId.dudak,
-            CharacterAnimationId.idleBlink,
-          ).toSequenceClip(),
-          idleSway: animationConfigFor(
-            RoomId.rocket,
-            CharacterId.dudak,
-            CharacterAnimationId.idleSway,
-          ).toSequenceClip(),
-          reactionHead: animationConfigFor(
-            RoomId.rocket,
-            CharacterId.dudak,
-            CharacterAnimationId.reactionHead,
-          ).toSequenceClip(),
-          reactionBelly: animationConfigFor(
-            RoomId.rocket,
-            CharacterId.dudak,
-            CharacterAnimationId.reactionBelly,
-          ).toSequenceClip(),
-          reactionLegs: animationConfigFor(
-            RoomId.rocket,
-            CharacterId.dudak,
-            CharacterAnimationId.reactionLegs,
-          ).toSequenceClip(),
-          idleYawn: animationConfigFor(
-            RoomId.rocket,
-            CharacterId.dudak,
-            CharacterAnimationId.idleYawn,
-          ).toSequenceClip(),
-        ),
+        for (final room in roomNavigationOrder)
+          if (roomHasReadyCharacterAssets(room))
+            room: _buildCharacterDefinition(
+              room,
+              roomConfigMap[room]!.character,
+            ),
       };
+
+  static String _characterLabel(CharacterId id) => switch (id) {
+    CharacterId.babak => 'Babak',
+    CharacterId.dudak => 'Dudak',
+  };
+
+  /// Builds a room's character from its per-animation configs. The yawn is a
+  /// night-only idle that only some rooms author, so it is attached only where
+  /// its config has actually been migrated to an atlas (others default to
+  /// pngOnly and get no yawn).
+  static CharacterDefinition _buildCharacterDefinition(
+    RoomId room,
+    CharacterId character,
+  ) {
+    SequenceClip clipFor(CharacterAnimationId animationId) =>
+        animationConfigFor(room, character, animationId).toSequenceClip();
+
+    final yawnConfig = animationConfigFor(
+      room,
+      character,
+      CharacterAnimationId.idleYawn,
+    );
+
+    return CharacterDefinition(
+      id: character,
+      label: _characterLabel(character),
+      idleBlink: clipFor(CharacterAnimationId.idleBlink),
+      idleSway: clipFor(CharacterAnimationId.idleSway),
+      reactionHead: clipFor(CharacterAnimationId.reactionHead),
+      reactionBelly: clipFor(CharacterAnimationId.reactionBelly),
+      reactionLegs: clipFor(CharacterAnimationId.reactionLegs),
+      idleYawn:
+          yawnConfig.migrationStatus == AnimationMigrationStatus.migrated
+          ? yawnConfig.toSequenceClip()
+          : null,
+    );
+  }
 
   RoomId get selectedRoom => _selectedRoom;
   CharacterId get selectedCharacter => roomConfigMap[_selectedRoom]!.character;
