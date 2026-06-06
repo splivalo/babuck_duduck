@@ -143,6 +143,26 @@ class _BabuckDuduckAppState extends State<BabuckDuduckApp>
       title: 'Babak & Dudak',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.theme,
+      builder: (context, child) {
+        // On a portrait phone the game fills the screen. On a wider surface
+        // (desktop browser), letterbox the content into a centered 9:16 phone
+        // frame on black so it doesn't stretch across the window.
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            const phoneAspect = 9 / 16;
+            final surfaceAspect = constraints.maxWidth / constraints.maxHeight;
+            if (surfaceAspect <= phoneAspect) {
+              return child!;
+            }
+            return ColoredBox(
+              color: Colors.black,
+              child: Center(
+                child: AspectRatio(aspectRatio: phoneAspect, child: child),
+              ),
+            );
+          },
+        );
+      },
       home: AnimatedSwitcher(
         duration: const Duration(milliseconds: 320),
         switchInCurve: Curves.easeOutCubic,
