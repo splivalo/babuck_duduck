@@ -603,9 +603,9 @@ _roomCharacterAnimationTunings = <String, RoomCharacterAnimationTuning>{
   ): RoomCharacterAnimationTuning(
     frameCounts: const <CharacterAnimationId, int>{
       CharacterAnimationId.idleBlink: 7,
-      CharacterAnimationId.idleSway: 17,
+      CharacterAnimationId.idleSway: 7,
       CharacterAnimationId.idleYawn: 28,
-      CharacterAnimationId.reactionHead: 18,
+      CharacterAnimationId.reactionHead: 13,
       CharacterAnimationId.reactionBelly: 14,
       CharacterAnimationId.reactionLegs: 18,
     },
@@ -619,6 +619,13 @@ _roomCharacterAnimationTunings = <String, RoomCharacterAnimationTuning>{
           reopenHoldMs: 80,
         ),
       ),
+      // Play the 7-frame sway twice in a row, sped up (50ms/frame vs the 100ms
+      // default). The sway starts and ends on the rest pose, so 6→0 loops clean.
+      CharacterAnimationId.idleSway: <AnimationFrameTiming>[
+        for (var rep = 0; rep < 2; rep++)
+          for (var i = 0; i < 7; i++)
+            AnimationFrameTiming(frameIndex: i, durationMs: 40),
+      ],
       CharacterAnimationId.idleYawn: <AnimationFrameTiming>[
         // Hold rest pose briefly before the yawn motion starts, so the
         // blink→yawn transition is not an abrupt pose change.
@@ -629,7 +636,7 @@ _roomCharacterAnimationTunings = <String, RoomCharacterAnimationTuning>{
           AnimationFrameTiming(frameIndex: i, durationMs: 80),
       ],
       CharacterAnimationId.reactionHead: <AnimationFrameTiming>[
-        for (var i = 0; i < 18; i++)
+        for (var i = 0; i < 13; i++)
           AnimationFrameTiming(frameIndex: i, durationMs: 36),
       ],
     },
@@ -642,10 +649,17 @@ _roomCharacterAnimationTunings = <String, RoomCharacterAnimationTuning>{
       CharacterAnimationId.reactionLegs: AnimationMigrationStatus.migrated,
     },
     animationEvents: const <CharacterAnimationId, List<AnimationTimelineEvent>>{
+      CharacterAnimationId.idleSway: <AnimationTimelineEvent>[
+        AnimationTimelineEvent(
+          name: 'idle_sway_babak',
+          timeMs: 16,
+          repeatEachLoop: false,
+        ),
+      ],
       CharacterAnimationId.idleYawn: <AnimationTimelineEvent>[
         AnimationTimelineEvent(
           name: 'yawn_babak',
-          timeMs: 0,
+          timeMs: 16,
           repeatEachLoop: false,
         ),
       ],
@@ -828,6 +842,13 @@ final Map<String, RoomCharacterSoundTuning> _roomCharacterSoundTunings =
             playbackBehavior: SoundPlaybackBehavior.restart,
             cues: <TimedSoundCue>[
               TimedSoundCue(assetPath: 'assets/sounds/babak/legs1.mp3'),
+            ],
+          ),
+        },
+        animationEventSounds: <String, AnimationEventSoundConfig>{
+          'idle_sway_babak': AnimationEventSoundConfig(
+            cues: <TimedSoundCue>[
+              TimedSoundCue(assetPath: 'assets/sounds/babak/babak.wav'),
             ],
           ),
         },
