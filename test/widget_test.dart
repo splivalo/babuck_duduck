@@ -475,18 +475,19 @@ void main() {
     manager.dispose();
   });
 
-  test('room entry opens on sway by day and yawn at night', () {
+  test('room entry opens on blink then sway by day, yawn at night', () {
     final manager = CharacterManager(
       soundManager: SoundManager(),
       random: Random(1234),
     );
 
-    // Day: the room opens on sway, then the next idle is forced to blink
-    // (a "special" idle never plays twice in a row).
+    // Day: the room opens on blink (cheapest atlas, no sound — lets the heavier
+    // sway atlas and the audio engine warm up first), then sway is forced as the
+    // very next idle.
     manager.syncRoom(RoomId.rocket);
     manager.syncNightMood(isNight: false);
-    expect(manager.debugTakeNextIdleClip().name, 'idle_sway');
     expect(manager.debugTakeNextIdleClip().name, 'idle_blink');
+    expect(manager.debugTakeNextIdleClip().name, 'idle_sway');
 
     // Night: the room opens on yawn (rocket Dudak has a yawn clip).
     manager.syncRoom(RoomId.rocket);
@@ -497,7 +498,7 @@ void main() {
     manager.dispose();
   });
 
-  test('room entry gate opens executed idle on sway by day', () {
+  test('room entry gate opens executed idle on blink by day', () {
     final manager = CharacterManager(
       soundManager: SoundManager(),
       random: Random(1234),
@@ -524,7 +525,7 @@ void main() {
       allowWhileInitializing: true,
     );
 
-    expect(manager.sequenceController.clip?.name, 'idle_sway');
+    expect(manager.sequenceController.clip?.name, 'idle_blink');
 
     manager.dispose();
   });

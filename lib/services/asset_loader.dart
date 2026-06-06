@@ -71,6 +71,7 @@ class AssetLoader {
       LinkedHashMap<String, _SpriteSheetAsset>();
   final Map<String, Future<_SpriteSheetAsset?>> _pendingSpriteSheetLoads =
       <String, Future<_SpriteSheetAsset?>>{};
+  bool _renderPipelineWarmed = false;
   Future<Set<String>>? _assetManifestFuture;
   final Map<String, int> _pngSequenceFrameCountCache = <String, int>{};
   final Map<String, List<String>> _pngSequenceFramePathsCache =
@@ -551,6 +552,12 @@ class AssetLoader {
         frameSource.metadataAssetPath,
       );
       final image = await _decodeUiImage(imageBytes);
+      // Decoding only produces a CPU-side image; the expensive GPU texture
+      // upload otherwise happens lazily on the first paint of this atlas,
+      // causing a one-time hitch the first time an animation plays. Warm it
+      // here (once per atlas, during room activation) so the first real frame
+      // is smooth.
+      await _warmUpImageOnGpu(image);
       final metadata = _parseSpriteSheetMetadata(metadataText);
       return _SpriteSheetAsset(
         image: image,
@@ -568,6 +575,56 @@ class AssetLoader {
     final completer = Completer<ui.Image>();
     ui.decodeImageFromList(bytes.buffer.asUint8List(), completer.complete);
     return completer.future;
+  }
+
+  /// Forces [image]'s texture onto the GPU by rasterizing a tiny draw of it.
+  /// `Picture.toImage` runs on the raster thread and must bind the source
+  /// texture to sample it, so the upload cost is paid here (off the first
+  /// paint). The 8x8 output is throwaway.
+  Future<void> _warmUpImageOnGpu(ui.Image image) async {
+    try {
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      final src = Rect.fromLTWH(
+        0,
+        0,
+        image.width.toDouble(),
+        image.height.toDouble(),
+      );
+      canvas.drawImageRect(
+        image,
+        src,
+        const Rect.fromLTWH(0, 0, 8, 8),
+        Paint()..filterQuality = FilterQuality.low,
+      );
+
+      if (!_renderPipelineWarmed) {
+        _renderPipelineWarmed = true;
+        // Compile the contact-shadow render pipeline once (Gaussian blur + a
+        // srcIn colour filter inside a save layer — exactly what
+        // _SpriteSheetContactShadow does). Otherwise these shaders compile on
+        // the first character paint, which lands on the cold-start room and
+        // hitches. Between rooms they're already compiled, hence smooth there.
+        final shadowPaint = Paint()
+          ..imageFilter = ui.ImageFilter.blur(sigmaX: 4, sigmaY: 4)
+          ..colorFilter = const ColorFilter.mode(Colors.black, BlendMode.srcIn);
+        canvas.saveLayer(const Rect.fromLTWH(0, 0, 8, 8), shadowPaint);
+        canvas.drawImageRect(
+          image,
+          src,
+          const Rect.fromLTWH(0, 0, 8, 8),
+          Paint()..filterQuality = FilterQuality.low,
+        );
+        canvas.restore();
+      }
+
+      final picture = recorder.endRecording();
+      final warmed = await picture.toImage(8, 8);
+      picture.dispose();
+      warmed.dispose();
+    } catch (_) {
+      // Warm-up is best-effort; rendering still works without it.
+    }
   }
 
   _ParsedSpriteSheetMetadata _parseSpriteSheetMetadata(String metadataText) {

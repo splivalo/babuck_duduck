@@ -41,6 +41,7 @@ class CharacterManager extends ChangeNotifier {
   _IdleAnimationKind? _lastIdleKind;
   bool _forceNextIdleBlink = true;
   bool _forceNextIdleYawn = false;
+  bool _forceNextIdleSway = false;
   bool _nightMood = false;
   bool _isRoomJustEntered = true;
   bool _roomIsInitializing = false;
@@ -203,15 +204,21 @@ class CharacterManager extends ChangeNotifier {
     _logRoomLifecycle('ROOM_ASSETS_READY', source: source);
     setState(CharacterLifecycleState.assetsReady);
     if (!spriteController.hasFirstTextureBound) {
-      // Seed the first painted frame with the clip the room will open on, so
-      // there's no blink→sway/yawn jump on entry.
-      spriteController.warmupFirstTexture(
-        _idleClipForKind(_roomEntryIdleKind()),
-      );
+      // Seed the first painted frame with the clip the room opens on, so there's
+      // no jump on entry. Day opens on blink (then sway); night opens on yawn.
+      final entryKind = _roomEntryIdleKind();
+      final seedClip = entryKind == _IdleAnimationKind.sway
+          ? currentCharacter.idleBlink
+          : _idleClipForKind(entryKind);
+      spriteController.warmupFirstTexture(seedClip);
     }
-    // The entry idle (sway/yawn) is always followed by a blink. Decode the
-    // blink atlas now so that first transition doesn't hitch on a cold entry.
-    spriteController.prefetchClip(currentCharacter.idleBlink);
+    // Prefetch the clip that plays right after the entry one so its first
+    // transition is decoded + GPU-warm on a cold entry: sway after the day
+    // blink, blink after the night yawn.
+    final followClip = _roomEntryIdleKind() == _IdleAnimationKind.sway
+        ? currentCharacter.idleSway
+        : currentCharacter.idleBlink;
+    spriteController.prefetchClip(followClip);
   }
 
   void markCharacterAttached({required String source}) {
@@ -444,10 +451,18 @@ class CharacterManager extends ChangeNotifier {
       _logIdle('IDLE_ROOM_ENTRY_GATE_CONSUMED room=${_selectedRoom.name}');
       _forceNextIdleBlink = false;
       _forceNextIdleYawn = false;
-      // Room entry opens with a "special" idle: yawn at night (if the character
-      // has one), sway by day. The next idle is then forced to blink (special
-      // never twice in a row), after which the normal 80/20 deck resumes.
       final entryKind = _roomEntryIdleKind();
+      if (entryKind == _IdleAnimationKind.sway) {
+        // Day entry opens with blink (cheapest atlas, no sound) so the heavier
+        // sway atlas and the audio engine warm up first; sway is forced as the
+        // very next idle. Fixes cold-entry hitch + first sway sound not playing.
+        _forceNextIdleSway = true;
+        _lastIdleKind = _IdleAnimationKind.blink;
+        return currentCharacter.idleBlink;
+      }
+      // Night entry still opens on the yawn (deliberate light-off feel); the
+      // next idle is forced to blink (special never twice in a row), after which
+      // the normal 80/20 deck resumes.
       _lastIdleKind = entryKind;
       return _idleClipForKind(entryKind);
     }
@@ -460,6 +475,12 @@ class CharacterManager extends ChangeNotifier {
         _lastIdleKind = _IdleAnimationKind.yawn;
         return yawn;
       }
+    }
+
+    if (_forceNextIdleSway) {
+      _forceNextIdleSway = false;
+      _lastIdleKind = _IdleAnimationKind.sway;
+      return currentCharacter.idleSway;
     }
 
     if (_forceNextIdleBlink) {
@@ -498,6 +519,7 @@ class CharacterManager extends ChangeNotifier {
     _lastIdleKind = null;
     _forceNextIdleBlink = true;
     _forceNextIdleYawn = false;
+    _forceNextIdleSway = false;
   }
 
   void _playIdleSequence(

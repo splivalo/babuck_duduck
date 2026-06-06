@@ -694,6 +694,15 @@ _roomCharacterAnimationTunings = <String, RoomCharacterAnimationTuning>{
       CharacterAnimationId.reactionBelly: AnimationMigrationStatus.migrated,
       CharacterAnimationId.reactionLegs: AnimationMigrationStatus.migrated,
     },
+    animationEvents: const <CharacterAnimationId, List<AnimationTimelineEvent>>{
+      CharacterAnimationId.idleSway: <AnimationTimelineEvent>[
+        AnimationTimelineEvent(
+          name: 'idle_sway_baloon_babak',
+          timeMs: 16,
+          repeatEachLoop: false,
+        ),
+      ],
+    },
   ),
   _roomCharacterTuningKey(
     RoomId.wardrobe,
@@ -834,14 +843,19 @@ final Map<String, RoomCharacterSoundTuning> _roomCharacterSoundTunings =
           TouchZone.head: ReactionSoundConfig(
             playbackBehavior: SoundPlaybackBehavior.restart,
             cues: <TimedSoundCue>[
-              TimedSoundCue(assetPath: 'assets/sounds/babak/head1.mp3'),
+              TimedSoundCue(assetPath: 'assets/sounds/babak/babak_poing.wav'),
             ],
           ),
-          TouchZone.belly: ReactionSoundConfig(cues: <TimedSoundCue>[]),
+          TouchZone.belly: ReactionSoundConfig(
+            playbackBehavior: SoundPlaybackBehavior.restart,
+            cues: <TimedSoundCue>[
+              TimedSoundCue(assetPath: 'assets/sounds/babak/bleeh.wav'),
+            ],
+          ),
           TouchZone.legs: ReactionSoundConfig(
             playbackBehavior: SoundPlaybackBehavior.restart,
             cues: <TimedSoundCue>[
-              TimedSoundCue(assetPath: 'assets/sounds/babak/legs1.mp3'),
+              TimedSoundCue(assetPath: 'assets/sounds/babak/uhh.wav'),
             ],
           ),
         },
@@ -849,6 +863,11 @@ final Map<String, RoomCharacterSoundTuning> _roomCharacterSoundTunings =
           'idle_sway_babak': AnimationEventSoundConfig(
             cues: <TimedSoundCue>[
               TimedSoundCue(assetPath: 'assets/sounds/babak/babak.wav'),
+            ],
+          ),
+          'yawn_babak': AnimationEventSoundConfig(
+            cues: <TimedSoundCue>[
+              TimedSoundCue(assetPath: 'assets/sounds/babak/babak_yawn.wav'),
             ],
           ),
         },
@@ -861,14 +880,26 @@ final Map<String, RoomCharacterSoundTuning> _roomCharacterSoundTunings =
           TouchZone.head: ReactionSoundConfig(
             playbackBehavior: SoundPlaybackBehavior.restart,
             cues: <TimedSoundCue>[
-              TimedSoundCue(assetPath: 'assets/sounds/babak/head1.mp3'),
+              TimedSoundCue(assetPath: 'assets/sounds/babak/screak.wav'),
             ],
           ),
-          TouchZone.belly: ReactionSoundConfig(cues: <TimedSoundCue>[]),
+          TouchZone.belly: ReactionSoundConfig(
+            playbackBehavior: SoundPlaybackBehavior.restart,
+            cues: <TimedSoundCue>[
+              TimedSoundCue(assetPath: 'assets/sounds/babak/belly_laugh.wav'),
+            ],
+          ),
           TouchZone.legs: ReactionSoundConfig(
             playbackBehavior: SoundPlaybackBehavior.restart,
             cues: <TimedSoundCue>[
-              TimedSoundCue(assetPath: 'assets/sounds/babak/legs1.mp3'),
+              TimedSoundCue(assetPath: 'assets/sounds/babak/legs_laugh.wav'),
+            ],
+          ),
+        },
+        animationEventSounds: <String, AnimationEventSoundConfig>{
+          'idle_sway_baloon_babak': AnimationEventSoundConfig(
+            cues: <TimedSoundCue>[
+              TimedSoundCue(assetPath: 'assets/sounds/babak/whistle.wav'),
             ],
           ),
         },
